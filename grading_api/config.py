@@ -68,7 +68,7 @@ def load_dotenv(path: str | os.PathLike[str] | None = None) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key and not os.environ.get(key, "").strip():
             os.environ[key] = value
 
 

@@ -42,6 +42,16 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(settings.openai_api_key, "from-env")
 
+    def test_dotenv_overrides_empty_environment_value(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text("OPENAI_API_KEY=from-dotenv", encoding="utf-8")
+
+            with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=True):
+                settings = load_settings(env_path=env_path)
+
+        self.assertEqual(settings.openai_api_key, "from-dotenv")
+
 
 if __name__ == "__main__":
     unittest.main()

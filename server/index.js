@@ -27,6 +27,34 @@ function json(res, statusCode, payload) {
   res.end(body);
 }
 
+function readJsonBody(req, maxBytes) {
+  return new Promise((resolveBody, rejectBody) => {
+    const chunks = [];
+    let size = 0;
+
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        rejectBody(Object.assign(new Error("Request body is too large"), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        resolveBody(JSON.parse(raw || "{}"));
+      } catch {
+        rejectBody(Object.assign(new Error("Request body must be valid JSON"), { statusCode: 400 }));
+      }
+    });
+
+    req.on("error", rejectBody);
+  });
+}
+
 function isSafePath(baseDir, candidatePath) {
   const relative = normalize(candidatePath).slice(normalize(baseDir).length);
   return Boolean(relative) && !relative.startsWith("..") && !resolve(candidatePath).includes("\0");
@@ -62,13 +90,61 @@ async function serveStatic(req, res) {
   }
 }
 
+async function proxyGradeAnswer(req, res) {
+  let payload;
+
+  try {
+    payload = await readJsonBody(req, config.maxProxyBodyBytes);
+  } catch (error) {
+    json(res, error.statusCode || 400, {
+      error: error.statusCode === 413 ? "payload_too_large" : "bad_request",
+      message: error.message
+    });
+    return;
+  }
+
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  if (config.gradingApiToken) {
+    headers["X-Grading-Api-Token"] = config.gradingApiToken;
+  }
+
+  let gradingResponse;
+  let gradingBody;
+
+  try {
+    gradingResponse = await fetch(`${config.gradingApiBaseUrl}/api/grade`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+    gradingBody = await gradingResponse.json();
+  } catch {
+    json(res, 502, {
+      error: "grading_api_unavailable",
+      message: "评分 API 暂不可用，请确认 Python 服务已启动。"
+    });
+    return;
+  }
+
+  json(res, gradingResponse.status, gradingBody);
+}
+
 const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url?.startsWith("/api/health")) {
     json(res, 200, {
       ok: true,
       service: "exam-grading-assistant",
-      hasOpenAiKey: config.hasOpenAiKey
+      hasOpenAiKey: config.hasOpenAiKey,
+      gradingApiBaseUrl: config.gradingApiBaseUrl
     });
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/api/grade-answer")) {
+    await proxyGradeAnswer(req, res);
     return;
   }
 

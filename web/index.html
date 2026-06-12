@@ -8,39 +8,182 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="workspace">
-        <header class="workspace__header">
-          <div>
-            <p class="eyebrow">本机辅助批阅</p>
-            <h1>试卷批改助手</h1>
-          </div>
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">本机辅助批阅</p>
+          <h1>试卷批改助手</h1>
+        </div>
+        <div class="status-stack">
           <div class="status-pill" id="healthStatus">检查服务中</div>
-        </header>
+          <div class="status-note" id="apiTarget"></div>
+        </div>
+      </header>
 
-        <section class="panel">
-          <div class="panel__title">
-            <h2>当前工作台</h2>
-            <p>项目骨架已就绪，下一步将在功能分支中接入窗口捕获和答案区域裁剪。</p>
+      <section class="workspace-grid">
+        <section class="panel capture-panel">
+          <div class="panel__header">
+            <div>
+              <h2>答案画面</h2>
+              <p id="captureStatus">等待捕获</p>
+            </div>
+            <div class="toolbar">
+              <button class="button button--primary" id="startCaptureBtn" type="button" title="选择窗口">开始捕获</button>
+              <button class="button" id="snapshotBtn" type="button" title="刷新裁剪图" disabled>裁剪</button>
+              <button class="icon-button" id="stopCaptureBtn" type="button" title="停止捕获" disabled aria-label="停止捕获">×</button>
+            </div>
           </div>
 
-          <div class="empty-state">
-            <div class="empty-state__mark">A</div>
-            <div>
-              <h3>等待接入屏幕捕获</h3>
-              <p>这里将显示爱探究窗口预览、答案裁剪图和 AI 建议分。</p>
+          <div class="preview-frame" id="previewFrame">
+            <video id="captureVideo" autoplay muted playsinline></video>
+            <div class="selection-overlay" id="selectionOverlay" aria-label="答案区域框选层"></div>
+            <div class="crop-box is-hidden" id="cropBox"></div>
+            <div class="preview-empty" id="previewEmpty">未捕获</div>
+          </div>
+
+          <div class="crop-workbench">
+            <div class="crop-preview">
+              <canvas id="cropCanvas"></canvas>
+              <div class="crop-empty" id="cropEmpty">暂无裁剪图</div>
+            </div>
+            <div class="capture-meta">
+              <output id="cropSize">未框选</output>
+              <label class="check-row">
+                <input id="privacyConfirm" type="checkbox">
+                <span>裁剪图不含姓名、班级或学号</span>
+              </label>
             </div>
           </div>
         </section>
 
-        <section class="grid">
-          <article class="info-card">
-            <h2>安全边界</h2>
-            <p>第一版只给建议分，老师负责最终录分。工具不保存爱探究账号密码，不自动提交成绩。</p>
-          </article>
-          <article class="info-card">
-            <h2>下一分支</h2>
-            <p><code>feature/web-capture</code> 将实现浏览器窗口捕获和实时预览。</p>
-          </article>
+        <aside class="panel config-panel">
+          <div class="panel__header">
+            <div>
+              <h2>题目规则</h2>
+              <p id="saveStatus">本地保存</p>
+            </div>
+            <button class="button" id="clearConfigBtn" type="button">清空</button>
+          </div>
+
+          <form id="gradingForm" class="grading-form">
+            <div class="field-grid">
+              <label class="field">
+                <span>题号</span>
+                <input id="questionId" name="question_id" type="text" autocomplete="off" placeholder="q1">
+              </label>
+              <label class="field">
+                <span>满分</span>
+                <input id="maxScore" name="max_score" type="number" min="0.1" max="100" step="0.1" value="6" required>
+              </label>
+              <label class="field">
+                <span>计分精度</span>
+                <select id="scorePrecision" name="score_precision">
+                  <option value="0.5">0.5 分</option>
+                  <option value="integer">整数</option>
+                  <option value="0.1">0.1 分</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>规则版本</span>
+                <input id="ruleVersion" name="rule_version" type="text" autocomplete="off" placeholder="v1">
+              </label>
+            </div>
+
+            <label class="field">
+              <span>标准答案</span>
+              <textarea id="standardAnswer" name="standard_answer" rows="3"></textarea>
+            </label>
+            <div class="image-field" data-reference="standard_answer_image">
+              <div class="file-row">
+                <label class="button file-button" for="standardAnswerImage">选择标准答案图片</label>
+                <input id="standardAnswerImage" name="standard_answer_image" type="file" accept="image/png,image/jpeg,image/webp">
+                <button class="button" id="removeStandardAnswerImageBtn" type="button" disabled>移除</button>
+              </div>
+              <div class="reference-preview is-hidden" id="standardAnswerImagePreview">
+                <img alt="标准答案图片预览" id="standardAnswerImagePreviewImg">
+                <span id="standardAnswerImageMeta"></span>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>给分规则</span>
+              <textarea id="gradingRules" name="grading_rules" rows="5"></textarea>
+            </label>
+            <div class="image-field" data-reference="grading_rules_image">
+              <div class="file-row">
+                <label class="button file-button" for="gradingRulesImage">选择给分规则图片</label>
+                <input id="gradingRulesImage" name="grading_rules_image" type="file" accept="image/png,image/jpeg,image/webp">
+                <button class="button" id="removeGradingRulesImageBtn" type="button" disabled>移除</button>
+              </div>
+              <div class="reference-preview is-hidden" id="gradingRulesImagePreview">
+                <img alt="给分规则图片预览" id="gradingRulesImagePreviewImg">
+                <span id="gradingRulesImageMeta"></span>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>扣分规则</span>
+              <textarea id="deductionRules" name="deduction_rules" rows="3"></textarea>
+            </label>
+
+            <div class="switch-row">
+              <label class="check-row">
+                <input id="allowEquivalentAnswers" name="allow_equivalent_answers" type="checkbox" checked>
+                <span>允许等价答案</span>
+              </label>
+              <label class="check-row">
+                <input id="scoreBySteps" name="score_by_steps" type="checkbox" checked>
+                <span>按步骤给分</span>
+              </label>
+            </div>
+
+            <button class="button button--primary submit-button" id="submitGradeBtn" type="submit" disabled>获取建议分</button>
+          </form>
+        </aside>
+      </section>
+
+      <section class="review-grid">
+        <section class="panel result-panel">
+          <div class="panel__header">
+            <div>
+              <h2>评分结果</h2>
+              <p id="resultStatus">暂无结果</p>
+            </div>
+            <div class="review-badge" id="reviewBadge">未评分</div>
+          </div>
+
+          <div class="score-strip">
+            <div>
+              <span>建议分</span>
+              <strong id="suggestedScore">--</strong>
+            </div>
+            <div>
+              <span>置信度</span>
+              <strong id="confidence">--</strong>
+            </div>
+            <div>
+              <span>模型</span>
+              <strong id="modelName">--</strong>
+            </div>
+          </div>
+
+          <div class="result-detail">
+            <h3>学生答案摘要</h3>
+            <p id="answerSummary">--</p>
+            <h3>扣分点</h3>
+            <ul id="deductionList"></ul>
+            <h3>不确定因素</h3>
+            <ul id="uncertainList"></ul>
+            <p class="review-reason" id="reviewReason"></p>
+          </div>
+        </section>
+
+        <section class="panel history-panel">
+          <div>
+            <h2>最近记录</h2>
+            <p>只保存在当前浏览器</p>
+          </div>
+          <ol class="history-list" id="historyList"></ol>
+          <button class="button history-clear" id="clearHistoryBtn" type="button">清除记录</button>
         </section>
       </section>
     </main>

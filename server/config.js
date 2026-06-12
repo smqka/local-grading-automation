@@ -36,8 +36,19 @@ export function loadEnv(rootDir) {
 export function getConfig(rootDir) {
   loadEnv(rootDir);
 
+  const gradingApiBaseUrl = (
+    globalThis.process.env.GRADING_API_URL ||
+    `http://${globalThis.process.env.GRADING_API_HOST || "127.0.0.1"}:${globalThis.process.env.GRADING_API_PORT || "8765"}`
+  ).replace(/\/+$/, "");
+
   return {
     port: Number.parseInt(globalThis.process.env.PORT || "5173", 10),
-    hasOpenAiKey: Boolean(globalThis.process.env.OPENAI_API_KEY)
+    hasOpenAiKey: Boolean(globalThis.process.env.OPENAI_API_KEY),
+    gradingApiBaseUrl,
+    gradingApiToken: globalThis.process.env.GRADING_API_TOKEN || "",
+    maxProxyBodyBytes: Number.parseInt(
+      globalThis.process.env.GRADING_PROXY_MAX_BODY_BYTES || String(24 * 1024 * 1024),
+      10
+    )
   };
 }

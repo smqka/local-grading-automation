@@ -17,18 +17,45 @@
           <div class="status-pill" id="healthStatus">检查服务中</div>
         </header>
 
-        <section class="panel">
-          <div class="panel__title">
-            <h2>当前工作台</h2>
-            <p>项目骨架已就绪，下一步将在功能分支中接入窗口捕获和答案区域裁剪。</p>
+        <section class="panel capture-panel" aria-labelledby="captureTitle">
+          <div class="panel__title capture-panel__title">
+            <div>
+              <h2 id="captureTitle">窗口捕获</h2>
+              <p>选择电脑微信或爱探究所在窗口后，工具会在本页显示实时预览。当前阶段只预览，不裁剪、不评分、不提交。</p>
+            </div>
+            <div class="capture-actions">
+              <button class="button button--primary" id="startCaptureButton" type="button">开始捕获</button>
+              <button class="button" id="stopCaptureButton" type="button" disabled>停止捕获</button>
+            </div>
           </div>
 
-          <div class="empty-state">
-            <div class="empty-state__mark">A</div>
-            <div>
-              <h3>等待接入屏幕捕获</h3>
-              <p>这里将显示爱探究窗口预览、答案裁剪图和 AI 建议分。</p>
+          <div class="capture-layout">
+            <div class="preview-frame">
+              <video id="capturePreview" autoplay muted playsinline></video>
+              <div class="preview-placeholder" id="previewPlaceholder">
+                <div class="preview-placeholder__mark">A</div>
+                <div>
+                  <h3>等待选择窗口</h3>
+                  <p>点击“开始捕获”，在浏览器弹窗中选择爱探究窗口。</p>
+                </div>
+              </div>
             </div>
+
+            <aside class="capture-sidebar" aria-label="捕获状态">
+              <div class="metric">
+                <span class="metric__label">浏览器支持</span>
+                <strong class="metric__value" id="supportStatus">检测中</strong>
+              </div>
+              <div class="metric">
+                <span class="metric__label">捕获状态</span>
+                <strong class="metric__value" id="captureStatus">未开始</strong>
+              </div>
+              <div class="metric">
+                <span class="metric__label">画面尺寸</span>
+                <strong class="metric__value" id="captureSize">-</strong>
+              </div>
+              <p class="hint" id="captureHint">浏览器会要求你手动选择要共享的窗口，工具不能静默读取屏幕。</p>
+            </aside>
           </div>
         </section>
 
@@ -38,8 +65,8 @@
             <p>第一版只给建议分，老师负责最终录分。工具不保存爱探究账号密码，不自动提交成绩。</p>
           </article>
           <article class="info-card">
-            <h2>下一分支</h2>
-            <p><code>feature/web-capture</code> 将实现浏览器窗口捕获和实时预览。</p>
+            <h2>下一步</h2>
+            <p><code>feature/region-crop</code> 将在预览画面上实现学生答案区域框选和裁剪。</p>
           </article>
         </section>
       </section>

@@ -25,6 +25,12 @@ body {
   font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
 }
 
+button,
+input,
+textarea {
+  font: inherit;
+}
+
 code {
   padding: 2px 5px;
   border: 1px solid var(--line);
@@ -35,7 +41,7 @@ code {
 }
 
 .app-shell {
-  width: min(1120px, calc(100% - 32px));
+  width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
   padding: 32px 0;
 }
@@ -101,17 +107,20 @@ p {
   font-weight: 700;
 }
 
-.status-pill[data-state="ready"] {
+.status-pill[data-state="ready"],
+.metric__value[data-state="ready"] {
   border-color: rgba(15, 118, 110, 0.3);
   color: var(--accent-strong);
 }
 
-.status-pill[data-state="warning"] {
+.status-pill[data-state="warning"],
+.metric__value[data-state="pending"] {
   border-color: rgba(183, 121, 31, 0.35);
   color: var(--warning);
 }
 
-.status-pill[data-state="error"] {
+.status-pill[data-state="error"],
+.metric__value[data-state="error"] {
   border-color: rgba(180, 35, 24, 0.35);
   color: var(--error);
 }
@@ -129,22 +138,101 @@ p {
 }
 
 .panel__title {
-  max-width: 720px;
+  max-width: 780px;
 }
 
-.empty-state {
+.capture-panel__title {
+  display: flex;
+  max-width: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.capture-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.button {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.button:hover:not(:disabled) {
+  border-color: #aebbd0;
+  background: #f8fafc;
+}
+
+.button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.2);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.button--primary:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.capture-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.preview-frame {
+  position: relative;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid #cdd6e5;
+  border-radius: 8px;
+  background: #0f172a;
+}
+
+.preview-frame video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  object-fit: contain;
+  background: #0f172a;
+}
+
+.preview-placeholder {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 18px;
-  min-height: 240px;
-  margin-top: 20px;
   padding: 24px;
-  border: 1px dashed #b8c3d6;
-  border-radius: 8px;
   background: #fbfcff;
 }
 
-.empty-state__mark {
+.preview-placeholder[hidden] {
+  display: none;
+}
+
+.preview-placeholder__mark {
   display: grid;
   flex: 0 0 auto;
   width: 56px;
@@ -157,8 +245,43 @@ p {
   font-weight: 800;
 }
 
-.empty-state p {
+.preview-placeholder p {
   margin-bottom: 0;
+}
+
+.capture-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.metric {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.metric__label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.metric__value {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.hint {
+  margin: 2px 0 0;
+  padding: 14px;
+  border: 1px solid #d8e3ed;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 14px;
 }
 
 .grid {
@@ -175,14 +298,33 @@ p {
   margin-bottom: 0;
 }
 
+@media (max-width: 900px) {
+  .capture-panel__title,
+  .capture-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .capture-panel__title {
+    flex-direction: column;
+  }
+
+  .capture-actions {
+    width: 100%;
+  }
+
+  .button {
+    flex: 1 1 0;
+  }
+}
+
 @media (max-width: 720px) {
   .app-shell {
-    width: min(100% - 24px, 1120px);
+    width: min(100% - 24px, 1180px);
     padding: 20px 0;
   }
 
   .workspace__header,
-  .empty-state {
+  .preview-placeholder {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -193,5 +335,10 @@ p {
 
   h1 {
     font-size: 26px;
+  }
+
+  .preview-frame,
+  .preview-frame video {
+    min-height: 300px;
   }
 }

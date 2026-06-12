@@ -1,0 +1,15 @@
+{
+  "name": "exam-grading-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Teacher-confirmed AI assistant for grading math exam answers.",
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.js",
+    "start": "node server/index.js",
+    "check": "node --check server/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

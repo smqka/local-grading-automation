@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>试卷批改助手</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="workspace__header">
+          <div>
+            <p class="eyebrow">本机辅助批阅</p>
+            <h1>试卷批改助手</h1>
+          </div>
+          <div class="status-pill" id="healthStatus">检查服务中</div>
+        </header>
+
+        <section class="panel">
+          <div class="panel__title">
+            <h2>当前工作台</h2>
+            <p>项目骨架已就绪，下一步将在功能分支中接入窗口捕获和答案区域裁剪。</p>
+          </div>
+
+          <div class="empty-state">
+            <div class="empty-state__mark">A</div>
+            <div>
+              <h3>等待接入屏幕捕获</h3>
+              <p>这里将显示爱探究窗口预览、答案裁剪图和 AI 建议分。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid">
+          <article class="info-card">
+            <h2>安全边界</h2>
+            <p>第一版只给建议分，老师负责最终录分。工具不保存爱探究账号密码，不自动提交成绩。</p>
+          </article>
+          <article class="info-card">
+            <h2>下一分支</h2>
+            <p><code>feature/web-capture</code> 将实现浏览器窗口捕获和实时预览。</p>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

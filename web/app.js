@@ -60,6 +60,18 @@ const referenceImages = {
 let dragStart = null;
 let isSubmitting = false;
 
+function updatePreviewAspectRatio() {
+  if (!elements.captureVideo.videoWidth || !elements.captureVideo.videoHeight) {
+    elements.previewFrame.style.removeProperty("--capture-aspect-ratio");
+    return;
+  }
+
+  elements.previewFrame.style.setProperty(
+    "--capture-aspect-ratio",
+    `${elements.captureVideo.videoWidth} / ${elements.captureVideo.videoHeight}`
+  );
+}
+
 async function checkHealth() {
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
@@ -121,6 +133,7 @@ async function startCapture() {
   track.addEventListener("ended", stopCapture);
 
   await elements.captureVideo.play();
+  updatePreviewAspectRatio();
   restoreCropBox();
   refreshSubmitState();
 }
@@ -134,6 +147,7 @@ function stopCapture() {
 
   mediaStream = null;
   elements.captureVideo.srcObject = null;
+  elements.previewFrame.style.removeProperty("--capture-aspect-ratio");
   elements.previewEmpty.classList.remove("is-hidden");
   elements.startCaptureBtn.disabled = false;
   elements.snapshotBtn.disabled = true;
@@ -221,9 +235,15 @@ function captureCrop() {
     return;
   }
 
-  const frameBounds = elements.previewFrame.getBoundingClientRect();
-  const scaleX = elements.captureVideo.videoWidth / frameBounds.width;
-  const scaleY = elements.captureVideo.videoHeight / frameBounds.height;
+  const videoBounds = elements.captureVideo.getBoundingClientRect();
+  if (!videoBounds.width || !videoBounds.height) {
+    setCaptureStatus("捕获画面尺寸异常，请重新开始捕获。", "error");
+    refreshSubmitState();
+    return;
+  }
+
+  const scaleX = elements.captureVideo.videoWidth / videoBounds.width;
+  const scaleY = elements.captureVideo.videoHeight / videoBounds.height;
   const sourceX = Math.round(cropRect.x * scaleX);
   const sourceY = Math.round(cropRect.y * scaleY);
   const sourceWidth = Math.round(cropRect.width * scaleX);
@@ -664,6 +684,8 @@ for (const field of Object.values(fields)) {
 elements.startCaptureBtn.addEventListener("click", startCapture);
 elements.stopCaptureBtn.addEventListener("click", stopCapture);
 elements.snapshotBtn.addEventListener("click", captureCrop);
+elements.captureVideo.addEventListener("loadedmetadata", updatePreviewAspectRatio);
+elements.captureVideo.addEventListener("resize", updatePreviewAspectRatio);
 elements.selectionOverlay.addEventListener("pointerdown", beginSelection);
 elements.selectionOverlay.addEventListener("pointermove", updateSelection);
 elements.selectionOverlay.addEventListener("pointerup", endSelection);

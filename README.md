@@ -2,9 +2,7 @@
 
 一个面向数学老师的网页端 AI 批阅辅助工具。当前产品路线坚持“老师确认型辅助批阅”：不保存爱探究账号密码，不自动提交分数，不调用爱探究私有接口。
 
-当前分支：`feature/grading-api`
-
-本分支实现本地 AI 建议评分闭环。网页端负责老师主动授权的窗口捕获、答案区域框选、裁剪预览和结果展示；Python 评分 API 只接收裁剪后的学生答案区域图片，返回结构化“建议分”，不读取或提交爱探究数据。
+当前版本实现本地 AI 建议评分闭环。网页端负责老师主动授权的窗口捕获、答案区域框选、裁剪预览和结果展示；Python 评分 API 只接收裁剪后的学生答案区域图片，返回结构化“建议分”，不读取或提交爱探究数据。
 
 ## 功能边界
 
@@ -23,6 +21,12 @@
 
 ```powershell
 python -m grading_api.server
+```
+
+如果系统 `python` 不可用，可以使用 Codex 桌面内置 Python 路径启动：
+
+```powershell
+C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m grading_api.server
 ```
 
 再启动网页端：

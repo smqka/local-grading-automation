@@ -69,8 +69,18 @@ async function checkHealth() {
       throw new Error("Service health check failed");
     }
 
-    elements.healthStatus.textContent = health.hasOpenAiKey ? "网页服务正常" : "未配置 AI key";
-    elements.healthStatus.dataset.state = health.hasOpenAiKey ? "ready" : "warning";
+    const gradingApiReady = Boolean(health.gradingApi?.ok);
+    const gradingApiHasKey = health.gradingApi?.hasOpenAiKey !== false;
+    if (!health.hasOpenAiKey || !gradingApiHasKey) {
+      elements.healthStatus.textContent = "未配置 AI key";
+      elements.healthStatus.dataset.state = "warning";
+    } else if (!gradingApiReady) {
+      elements.healthStatus.textContent = "评分 API 未启动";
+      elements.healthStatus.dataset.state = "warning";
+    } else {
+      elements.healthStatus.textContent = "服务正常";
+      elements.healthStatus.dataset.state = "ready";
+    }
     elements.apiTarget.textContent = health.gradingApiBaseUrl ? `评分 API：${health.gradingApiBaseUrl}` : "";
   } catch {
     elements.healthStatus.textContent = "网页服务异常";
@@ -372,7 +382,11 @@ async function submitGrade(event) {
     renderResult(result);
     addHistoryItem(result);
   } catch (error) {
-    renderError(error.message || "评分请求失败");
+    const message =
+      error.message === "grading_api_unavailable"
+        ? "评分 API 暂不可用，请先启动 Python 服务。"
+        : error.message || "评分请求失败";
+    renderError(message);
   } finally {
     isSubmitting = false;
     elements.submitGradeBtn.textContent = "获取建议分";

@@ -20,7 +20,8 @@ class GradingRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send_json({"status": "ok"})
+            settings = self.server.settings  # type: ignore[attr-defined]
+            self._send_json({"status": "ok", "has_openai_key": bool(settings.openai_api_key)})
             return
         self._send_json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
 

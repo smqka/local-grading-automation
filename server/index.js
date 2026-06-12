@@ -27,6 +27,31 @@ function json(res, statusCode, payload) {
   res.end(body);
 }
 
+async function fetchGradingApiHealth() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1200);
+
+  try {
+    const response = await fetch(`${config.gradingApiBaseUrl}/health`, {
+      cache: "no-store",
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => ({}));
+    return {
+      ok: response.ok && payload.status === "ok",
+      statusCode: response.status,
+      hasOpenAiKey: Boolean(payload.has_openai_key)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.name === "AbortError" ? "timeout" : "unavailable"
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function readJsonBody(req, maxBytes) {
   return new Promise((resolveBody, rejectBody) => {
     const chunks = [];
@@ -134,11 +159,13 @@ async function proxyGradeAnswer(req, res) {
 
 const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url?.startsWith("/api/health")) {
+    const gradingApi = await fetchGradingApiHealth();
     json(res, 200, {
       ok: true,
       service: "exam-grading-assistant",
       hasOpenAiKey: config.hasOpenAiKey,
-      gradingApiBaseUrl: config.gradingApiBaseUrl
+      gradingApiBaseUrl: config.gradingApiBaseUrl,
+      gradingApi
     });
     return;
   }

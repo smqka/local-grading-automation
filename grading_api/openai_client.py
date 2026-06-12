@@ -101,7 +101,7 @@ class OpenAIResponsesClient:
                 response_body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = _safe_error_detail(exc)
-            raise UpstreamError("OpenAI request failed.", details=detail) from exc
+            raise UpstreamError(_safe_upstream_message(detail), details=detail) from exc
         except urllib.error.URLError as exc:
             raise UpstreamError("Could not reach OpenAI API.", details={"reason": str(exc.reason)}) from exc
         except TimeoutError as exc:
@@ -252,6 +252,11 @@ def _safe_error_detail(exc: urllib.error.HTTPError) -> dict[str, Any]:
             "status": exc.code,
             "type": error.get("type"),
             "code": error.get("code"),
-            "message": error.get("message"),
         }
     return {"status": exc.code}
+
+
+def _safe_upstream_message(detail: dict[str, Any]) -> str:
+    if detail.get("status") in {401, 403} or detail.get("code") in {"invalid_api_key", "insufficient_quota"}:
+        return "OpenAI API credentials are invalid or not authorized."
+    return "OpenAI request failed."

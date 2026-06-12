@@ -1,8 +1,16 @@
+import io
 import json
 import unittest
+import urllib.error
 
 from grading_api.config import Settings
-from grading_api.openai_client import OpenAIResponsesClient, build_user_prompt, extract_output_text
+from grading_api.openai_client import (
+    OpenAIResponsesClient,
+    _safe_error_detail,
+    _safe_upstream_message,
+    build_user_prompt,
+    extract_output_text,
+)
 from grading_api.validation import parse_grade_request
 
 from tests.test_grading_service import valid_payload
@@ -83,6 +91,35 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         )
 
         self.assertEqual(json.loads(response)["suggested_score"], 3)
+
+    def test_http_error_detail_does_not_expose_provider_message(self):
+        body = json.dumps(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "invalid_api_key",
+                    "message": "Incorrect API key provided: secret-token",
+                }
+            }
+        ).encode("utf-8")
+        error = urllib.error.HTTPError(
+            url="https://api.openai.com/v1/responses",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=io.BytesIO(body),
+        )
+
+        detail = _safe_error_detail(error)
+
+        self.assertEqual(detail["status"], 401)
+        self.assertEqual(detail["code"], "invalid_api_key")
+        self.assertNotIn("message", detail)
+        self.assertNotIn("secret-token", json.dumps(detail))
+        self.assertEqual(
+            _safe_upstream_message(detail),
+            "OpenAI API credentials are invalid or not authorized.",
+        )
 
 
 if __name__ == "__main__":

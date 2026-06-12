@@ -21,7 +21,7 @@
           <div class="panel__title capture-panel__title">
             <div>
               <h2 id="captureTitle">窗口捕获</h2>
-              <p>选择电脑微信或爱探究所在窗口后，工具会在本页显示实时预览。当前阶段只预览，不裁剪、不评分、不提交。</p>
+              <p>选择电脑微信或爱探究所在窗口后，工具会在本页显示实时预览。当前阶段支持手动框选和本地裁剪预览，不评分、不提交。</p>
             </div>
             <div class="capture-actions">
               <button class="button button--primary" id="startCaptureButton" type="button">开始捕获</button>
@@ -32,6 +32,11 @@
           <div class="capture-layout">
             <div class="preview-frame">
               <video id="capturePreview" autoplay muted playsinline></video>
+              <div class="selection-layer" id="selectionLayer" hidden>
+                <div class="selection-box" id="cropSelection" hidden>
+                  <span>答案区域</span>
+                </div>
+              </div>
               <div class="preview-placeholder" id="previewPlaceholder">
                 <div class="preview-placeholder__mark">A</div>
                 <div>
@@ -54,7 +59,37 @@
                 <span class="metric__label">画面尺寸</span>
                 <strong class="metric__value" id="captureSize">-</strong>
               </div>
+              <div class="metric">
+                <span class="metric__label">答案选区</span>
+                <strong class="metric__value" id="selectionStatus">未框选</strong>
+              </div>
+              <div class="metric">
+                <span class="metric__label">选区尺寸</span>
+                <strong class="metric__value" id="selectionSize">-</strong>
+              </div>
               <p class="hint" id="captureHint">浏览器会要求你手动选择要共享的窗口，工具不能静默读取屏幕。</p>
+            </aside>
+          </div>
+
+          <div class="crop-workspace" aria-label="裁剪预览">
+            <div class="crop-preview-frame">
+              <canvas id="cropCanvas" hidden></canvas>
+              <div class="crop-placeholder" id="cropPlaceholder">
+                <h3>裁剪预览</h3>
+                <p>框选答案区域后，这里显示即将用于评分的图片。</p>
+              </div>
+            </div>
+
+            <aside class="crop-sidebar">
+              <div class="metric">
+                <span class="metric__label">裁剪状态</span>
+                <strong class="metric__value" id="cropStatus">未生成</strong>
+              </div>
+              <div class="crop-actions">
+                <button class="button button--primary" id="refreshCropButton" type="button" disabled>刷新裁剪</button>
+                <button class="button" id="clearSelectionButton" type="button" disabled>清除选区</button>
+              </div>
+              <p class="hint">裁剪图只在本页本地生成，请确认不包含姓名、班级、聊天消息或分数输入区。</p>
             </aside>
           </div>
         </section>
@@ -66,7 +101,7 @@
           </article>
           <article class="info-card">
             <h2>下一步</h2>
-            <p><code>feature/region-crop</code> 将在预览画面上实现学生答案区域框选和裁剪。</p>
+            <p><code>feature/grading-api</code> 将接收裁剪后的答案图，并返回老师复核用的建议分。</p>
           </article>
         </section>
       </section>

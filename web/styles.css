@@ -202,6 +202,7 @@ p {
 .preview-frame {
   position: relative;
   min-height: 420px;
+  user-select: none;
   overflow: hidden;
   border: 1px solid #cdd6e5;
   border-radius: 8px;
@@ -215,6 +216,43 @@ p {
   min-height: 420px;
   object-fit: contain;
   background: #0f172a;
+}
+
+.selection-layer {
+  position: absolute;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.selection-layer[hidden] {
+  display: none;
+}
+
+.selection-box {
+  position: absolute;
+  min-width: 12px;
+  min-height: 12px;
+  border: 2px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.38);
+  pointer-events: none;
+}
+
+.selection-box[hidden] {
+  display: none;
+}
+
+.selection-box span {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .preview-placeholder {
@@ -284,6 +322,59 @@ p {
   font-size: 14px;
 }
 
+.crop-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.crop-preview-frame {
+  position: relative;
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #cdd6e5;
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.crop-preview-frame canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  background: #ffffff;
+}
+
+.crop-preview-frame canvas[hidden] {
+  display: none;
+}
+
+.crop-placeholder {
+  padding: 24px;
+  text-align: center;
+}
+
+.crop-placeholder[hidden] {
+  display: none;
+}
+
+.crop-placeholder p {
+  margin-bottom: 0;
+}
+
+.crop-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.crop-actions {
+  display: grid;
+  gap: 10px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -300,7 +391,8 @@ p {
 
 @media (max-width: 900px) {
   .capture-panel__title,
-  .capture-layout {
+  .capture-layout,
+  .crop-workspace {
     grid-template-columns: 1fr;
   }
 

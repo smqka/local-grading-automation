@@ -115,7 +115,7 @@ async function serveStatic(req, res) {
   }
 }
 
-async function proxyGradeAnswer(req, res) {
+async function proxyJsonToGradingApi(req, res, path) {
   let payload;
 
   try {
@@ -140,10 +140,38 @@ async function proxyGradeAnswer(req, res) {
   let gradingBody;
 
   try {
-    gradingResponse = await fetch(`${config.gradingApiBaseUrl}/api/grade`, {
+    gradingResponse = await fetch(`${config.gradingApiBaseUrl}${path}`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload)
+    });
+    gradingBody = await gradingResponse.json();
+  } catch {
+    json(res, 502, {
+      error: "grading_api_unavailable",
+      message: "评分 API 暂不可用，请确认 Python 服务已启动。"
+    });
+    return;
+  }
+
+  json(res, gradingResponse.status, gradingBody);
+}
+
+async function proxyGetToGradingApi(res, path) {
+  const headers = {};
+
+  if (config.gradingApiToken) {
+    headers["X-Grading-Api-Token"] = config.gradingApiToken;
+  }
+
+  let gradingResponse;
+  let gradingBody;
+
+  try {
+    gradingResponse = await fetch(`${config.gradingApiBaseUrl}${path}`, {
+      method: "GET",
+      headers,
+      cache: "no-store"
     });
     gradingBody = await gradingResponse.json();
   } catch {
@@ -170,8 +198,28 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && req.url?.startsWith("/api/mouse-position")) {
+    await proxyGetToGradingApi(res, "/api/mouse-position");
+    return;
+  }
+
   if (req.method === "POST" && req.url?.startsWith("/api/grade-answer")) {
-    await proxyGradeAnswer(req, res);
+    await proxyJsonToGradingApi(req, res, "/api/grade");
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/api/parse-reference")) {
+    await proxyJsonToGradingApi(req, res, "/api/parse-reference");
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/api/click-sequence")) {
+    await proxyJsonToGradingApi(req, res, "/api/click-sequence");
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/api/click")) {
+    await proxyJsonToGradingApi(req, res, "/api/click");
     return;
   }
 

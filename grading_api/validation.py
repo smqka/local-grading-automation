@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from .errors import BadRequestError
-from .models import GradeRequest, ImagePayload, ModelGradeResult, ScorePrecision
+from .models import GradeRequest, ImagePayload, ModelGradeResult, ReferenceParseRequest, ReferenceParseResult, ScorePrecision
 
 DATA_URI_RE = re.compile(r"^data:(image/(?:png|jpeg|webp));base64,(?P<data>[A-Za-z0-9+/=\s]+)$")
 SUPPORTED_PRECISIONS: tuple[ScorePrecision, ...] = ("integer", "0.5", "0.1")
@@ -27,14 +27,12 @@ def parse_grade_request(payload: dict[str, Any], *, max_image_bytes: int) -> Gra
         raise BadRequestError("max_score is unexpectedly large.", details={"limit": 100})
 
     standard_answer = _optional_text(payload.get("standard_answer"), "standard_answer")
-    standard_answer_image = _parse_optional_image(payload, "standard_answer_image", max_image_bytes=max_image_bytes)
-    if not standard_answer and standard_answer_image is None:
-        raise BadRequestError("Provide standard_answer text or standard_answer_image.")
+    if not standard_answer:
+        raise BadRequestError("Provide confirmed standard_answer text before grading.")
 
     grading_rules = _optional_text(payload.get("grading_rules"), "grading_rules")
-    grading_rules_image = _parse_optional_image(payload, "grading_rules_image", max_image_bytes=max_image_bytes)
-    if not grading_rules and grading_rules_image is None:
-        raise BadRequestError("Provide grading_rules text or grading_rules_image.")
+    if not grading_rules:
+        raise BadRequestError("Provide confirmed grading_rules text before grading.")
 
     deduction_rules = _optional_text(payload.get("deduction_rules"))
     score_precision = _parse_precision(payload.get("score_precision", "0.5"))
@@ -43,15 +41,81 @@ def parse_grade_request(payload: dict[str, Any], *, max_image_bytes: int) -> Gra
         image=image,
         max_score=max_score,
         standard_answer=standard_answer,
-        standard_answer_image=standard_answer_image,
         grading_rules=grading_rules,
-        grading_rules_image=grading_rules_image,
         deduction_rules=deduction_rules,
         allow_equivalent_answers=_parse_bool(payload.get("allow_equivalent_answers", True), "allow_equivalent_answers"),
         score_by_steps=_parse_bool(payload.get("score_by_steps", True), "score_by_steps"),
         score_precision=score_precision,
         question_id=_optional_text(payload.get("question_id")) or None,
         rule_version=_optional_text(payload.get("rule_version")) or None,
+    )
+
+
+def parse_reference_parse_request(payload: dict[str, Any], *, max_image_bytes: int) -> ReferenceParseRequest:
+    if not isinstance(payload, dict):
+        raise BadRequestError("Request body must be a JSON object.")
+
+    return ReferenceParseRequest(
+        image=_parse_image(payload, "image", max_image_bytes=max_image_bytes),
+        question_id=_optional_text(payload.get("question_id")) or None,
+        rule_version=_optional_text(payload.get("rule_version")) or None,
+    )
+
+
+def validate_reference_parse_result(raw: dict[str, Any]) -> ReferenceParseResult:
+    if not isinstance(raw, dict):
+        return ReferenceParseResult(
+            standard_answer="",
+            grading_rules="",
+            deduction_rules="",
+            max_score=None,
+            confidence=0.0,
+            needs_review=True,
+            review_reason="Model output was not a JSON object.",
+            uncertain_factors=[],
+            raw={},
+        )
+
+    confidence = raw.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(float(confidence)):
+        confidence_value = 0.0
+    else:
+        confidence_value = max(0.0, min(float(confidence), 1.0))
+
+    max_score = raw.get("max_score")
+    max_score_value = None
+    if not isinstance(max_score, bool) and isinstance(max_score, (int, float)) and math.isfinite(float(max_score)):
+        max_score_value = float(max_score)
+
+    standard_answer = _coerce_reference_text(raw.get("standard_answer"))
+    grading_rules = _coerce_reference_text(raw.get("grading_rules"))
+    deduction_rules = _coerce_reference_text(raw.get("deduction_rules"))
+    review_reason = _coerce_reference_text(raw.get("review_reason"))
+    needs_review = bool(raw.get("needs_review", False))
+    uncertain_factors = _string_list(raw.get("uncertain_factors"))
+
+    missing = []
+    if not standard_answer:
+        missing.append("standard_answer")
+    if not grading_rules:
+        missing.append("grading_rules")
+    if missing:
+        needs_review = True
+        review_reason = review_reason or f"Missing parsed fields: {', '.join(missing)}."
+    elif confidence_value < 0.8:
+        needs_review = True
+        review_reason = review_reason or "Reference parse confidence is below 0.80; teacher review is required."
+
+    return ReferenceParseResult(
+        standard_answer=standard_answer,
+        grading_rules=grading_rules,
+        deduction_rules=deduction_rules,
+        max_score=max_score_value,
+        confidence=round(confidence_value, 4),
+        needs_review=needs_review,
+        review_reason=review_reason,
+        uncertain_factors=uncertain_factors,
+        raw=raw,
     )
 
 
@@ -224,6 +288,26 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _coerce_reference_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool) or value is None:
+        return ""
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_coerce_reference_text(item) for item in value]
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, item in value.items():
+            text = _coerce_reference_text(item)
+            if text:
+                lines.append(f"{key}: {text}")
+        return "\n".join(lines)
+    return ""
 
 
 def _text_or_empty(value: Any) -> str:

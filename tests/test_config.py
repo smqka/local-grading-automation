@@ -52,6 +52,32 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(settings.openai_api_key, "from-dotenv")
 
+    def test_litterbox_image_url_mode_sets_upload_defaults(self):
+        with patch.dict(os.environ, {"GRADING_IMAGE_URL_MODE": "litterbox"}, clear=True):
+            settings = load_settings(env_path=Path("missing.env"))
+
+        self.assertEqual(settings.image_upload_url, "https://litterbox.catbox.moe/resources/internals/api.php")
+        self.assertEqual(settings.image_upload_field, "fileToUpload")
+        self.assertEqual(settings.image_upload_response_format, "text")
+        self.assertEqual(settings.image_upload_extra_fields, (("reqtype", "fileupload"), ("time", "1h")))
+
+    def test_imgbb_image_url_mode_sets_upload_defaults(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GRADING_IMAGE_URL_MODE": "imgbb",
+                "IMGBB_API_KEY": "test-key",
+                "IMGBB_EXPIRATION_SECONDS": "300",
+            },
+            clear=True,
+        ):
+            settings = load_settings(env_path=Path("missing.env"))
+
+        self.assertEqual(settings.image_upload_url, "https://api.imgbb.com/1/upload?expiration=300&key=test-key")
+        self.assertEqual(settings.image_upload_field, "image")
+        self.assertEqual(settings.image_upload_response_format, "json")
+        self.assertEqual(settings.image_upload_response_path, "data.medium.url")
+
 
 if __name__ == "__main__":
     unittest.main()

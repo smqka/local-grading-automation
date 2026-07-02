@@ -1,0 +1,6 @@
+interface:
+  display_name: "本地阅卷自动化"
+  short_description: "搭建、改造和排查本地 AI 阅卷自动化工具"
+  default_prompt: "Use $local-grading-automation to adapt this local grading assistant for my grading workflow."
+policy:
+  allow_implicit_invocation: true

@@ -2,9 +2,14 @@ import unittest
 
 from grading_api.config import Settings
 from grading_api.errors import BadRequestError
-from grading_api.models import GradeRequest
+from grading_api.models import GradeRequest, ReferenceParseRequest
 from grading_api.service import GradingService
-from grading_api.validation import parse_grade_request, validate_model_result
+from grading_api.validation import (
+    parse_grade_request,
+    parse_reference_parse_request,
+    validate_model_result,
+    validate_reference_parse_result,
+)
 
 
 PNG_1X1 = "data:image/png;base64,iVBORw0KGgo="
@@ -18,6 +23,10 @@ class FakeClient:
         self.last_request = None
 
     def grade(self, request: GradeRequest):
+        self.last_request = request
+        return self.response
+
+    def parse_reference(self, request: ReferenceParseRequest):
         self.last_request = request
         return self.response
 
@@ -60,19 +69,20 @@ class ParseGradeRequestTest(unittest.TestCase):
         self.assertEqual(request.max_score, 6)
         self.assertEqual(request.score_precision, "0.5")
 
-    def test_accepts_reference_images_instead_of_text(self):
+    def test_rejects_reference_images_instead_of_confirmed_text(self):
         payload = valid_payload()
         payload["standard_answer"] = ""
         payload["grading_rules"] = ""
         payload["standard_answer_image"] = PNG_1X1
         payload["grading_rules_image"] = PNG_1X1
 
-        request = parse_grade_request(payload, max_image_bytes=1024)
+        with self.assertRaises(BadRequestError):
+            parse_grade_request(payload, max_image_bytes=1024)
 
-        self.assertEqual(request.standard_answer, "")
-        self.assertEqual(request.grading_rules, "")
-        self.assertEqual(request.standard_answer_image.mime_type, "image/png")
-        self.assertEqual(request.grading_rules_image.mime_type, "image/png")
+    def test_accepts_reference_image_for_parse_step(self):
+        request = parse_reference_parse_request({"image": PNG_1X1}, max_image_bytes=1024)
+
+        self.assertEqual(request.image.mime_type, "image/png")
 
     def test_rejects_missing_rubric(self):
         payload = valid_payload()
@@ -175,6 +185,48 @@ class GradingServiceTest(unittest.TestCase):
         self.assertEqual(response.model, "fake-model")
         self.assertEqual(response.prompt_version, "test-prompt")
         self.assertEqual(response.question_id, "q1")
+
+    def test_parse_reference_payload_returns_editable_text_rules(self):
+        fake = FakeClient(
+            {
+                "standard_answer": "x = 2",
+                "grading_rules": "Equation 2 points; steps 2 points; final answer 2 points.",
+                "deduction_rules": "Blank answer gets 0.",
+                "max_score": 6,
+                "confidence": 0.91,
+                "needs_review": False,
+                "review_reason": "",
+                "uncertain_factors": [],
+            }
+        )
+        service = GradingService(settings(), model_client=fake)
+
+        response = service.parse_reference_payload({"image": PNG_1X1, "question_id": "q1"})
+
+        self.assertEqual(response.standard_answer, "x = 2")
+        self.assertEqual(response.max_score, 6)
+        self.assertEqual(response.question_id, "q1")
+
+    def test_reference_parse_result_coerces_nested_text(self):
+        result = validate_reference_parse_result(
+            {
+                "standard_answer": {"22(1)": "-3, 9", "22(2)": "D(2,-4)"},
+                "grading_rules": [
+                    {"part": "22(1)", "score": "2 points"},
+                    {"part": "22(2)", "score": "4 points"},
+                ],
+                "deduction_rules": {"blank": "0 points"},
+                "max_score": 6,
+                "confidence": 0.9,
+                "needs_review": False,
+                "review_reason": "",
+                "uncertain_factors": [],
+            }
+        )
+
+        self.assertIn("22(1): -3, 9", result.standard_answer)
+        self.assertIn("part: 22(1)", result.grading_rules)
+        self.assertIn("blank: 0 points", result.deduction_rules)
 
 
 if __name__ == "__main__":

@@ -25,3 +25,8 @@ class UnauthorizedError(GradingApiError):
 class UpstreamError(GradingApiError):
     status_code = 502
     error_code = "upstream_error"
+
+
+class MouseAutomationUnavailableError(GradingApiError):
+    status_code = 503
+    error_code = "mouse_automation_unavailable"

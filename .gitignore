@@ -8,6 +8,7 @@ build/
 .next/
 coverage/
 
+logs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -20,3 +21,6 @@ pnpm-debug.log*
 
 .DS_Store
 Thumbs.db
+
+.agents/
+.codex/

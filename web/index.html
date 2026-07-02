@@ -28,7 +28,7 @@
             </div>
             <div class="toolbar">
               <button class="button button--primary" id="startCaptureBtn" type="button" title="选择窗口">开始捕获</button>
-              <button class="button" id="snapshotBtn" type="button" title="刷新裁剪图" disabled>裁剪</button>
+              <button class="button" id="snapshotBtn" type="button" title="按当前框选区域重新生成裁剪图" disabled>更新裁剪图</button>
               <button class="icon-button" id="stopCaptureBtn" type="button" title="停止捕获" disabled aria-label="停止捕获">×</button>
             </div>
           </div>
@@ -47,10 +47,6 @@
             </div>
             <div class="capture-meta">
               <output id="cropSize">未框选</output>
-              <label class="check-row">
-                <input id="privacyConfirm" type="checkbox">
-                <span>裁剪图不含姓名、班级或学号</span>
-              </label>
             </div>
           </div>
         </section>
@@ -90,39 +86,17 @@
 
             <label class="field">
               <span>标准答案</span>
-              <textarea id="standardAnswer" name="standard_answer" rows="3"></textarea>
+              <textarea id="standardAnswer" name="standard_answer" rows="5" placeholder="例如：x = 2；写出必要过程或标准解法。"></textarea>
             </label>
-            <div class="image-field" data-reference="standard_answer_image">
-              <div class="file-row">
-                <label class="button file-button" for="standardAnswerImage">选择标准答案图片</label>
-                <input id="standardAnswerImage" name="standard_answer_image" type="file" accept="image/png,image/jpeg,image/webp">
-                <button class="button" id="removeStandardAnswerImageBtn" type="button" disabled>移除</button>
-              </div>
-              <div class="reference-preview is-hidden" id="standardAnswerImagePreview">
-                <img alt="标准答案图片预览" id="standardAnswerImagePreviewImg">
-                <span id="standardAnswerImageMeta"></span>
-              </div>
-            </div>
 
             <label class="field">
-              <span>给分规则</span>
-              <textarea id="gradingRules" name="grading_rules" rows="5"></textarea>
+              <span>每步给分规则</span>
+              <textarea id="gradingRules" name="grading_rules" rows="8" placeholder="例如：第1步列出正确方程，2分；第2步正确化简，2分；第3步最终答案正确，2分。"></textarea>
             </label>
-            <div class="image-field" data-reference="grading_rules_image">
-              <div class="file-row">
-                <label class="button file-button" for="gradingRulesImage">选择给分规则图片</label>
-                <input id="gradingRulesImage" name="grading_rules_image" type="file" accept="image/png,image/jpeg,image/webp">
-                <button class="button" id="removeGradingRulesImageBtn" type="button" disabled>移除</button>
-              </div>
-              <div class="reference-preview is-hidden" id="gradingRulesImagePreview">
-                <img alt="给分规则图片预览" id="gradingRulesImagePreviewImg">
-                <span id="gradingRulesImageMeta"></span>
-              </div>
-            </div>
 
             <label class="field">
               <span>扣分规则</span>
-              <textarea id="deductionRules" name="deduction_rules" rows="3"></textarea>
+              <textarea id="deductionRules" name="deduction_rules" rows="4" placeholder="例如：只有最终答案无过程最多2分；空白或无关答案0分。"></textarea>
             </label>
 
             <div class="switch-row">
@@ -167,13 +141,69 @@
           </div>
 
           <div class="result-detail">
-            <h3>学生答案摘要</h3>
-            <p id="answerSummary">--</p>
-            <h3>扣分点</h3>
-            <ul id="deductionList"></ul>
             <h3>不确定因素</h3>
             <ul id="uncertainList"></ul>
             <p class="review-reason" id="reviewReason"></p>
+          </div>
+        </section>
+
+        <section class="panel auto-click-panel">
+          <div class="panel__header">
+            <div>
+              <h2>自动点击</h2>
+              <p id="clickStatus">未启用</p>
+            </div>
+            <label class="check-row auto-click-toggle">
+              <input id="autoClickEnabled" type="checkbox">
+              <span>启用</span>
+            </label>
+          </div>
+
+          <div class="auto-click-tools">
+            <div class="auto-settings-grid">
+              <label class="field">
+                <span>置信度阈值</span>
+                <input id="confidenceThreshold" type="number" min="1" max="100" step="1" value="80">
+              </label>
+              <label class="field">
+                <span>低于阈值</span>
+                <select id="lowConfidenceAction">
+                  <option value="review">等待审核</option>
+                  <option value="skip">自动跳过</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>翻页后截图延迟</span>
+                <div class="number-unit">
+                  <input id="pageRefreshDelayMs" type="number" min="0" max="5" step="0.1" value="1">
+                  <span>秒</span>
+                </div>
+              </label>
+            </div>
+
+            <div class="auto-flow-buttons">
+              <button class="button button--primary" id="startAutoFlowBtn" type="button">开始批卷</button>
+              <button class="button" id="pauseAutoFlowBtn" type="button" disabled>暂停</button>
+              <button class="button" id="continueAutoFlowBtn" type="button" disabled>继续</button>
+            </div>
+
+            <div class="coordinate-toolbar">
+              <output id="mousePosition">--</output>
+              <button class="button" id="refreshMouseBtn" type="button">读取坐标</button>
+              <button class="button" id="recordNextClickBtn" type="button">记录跳过</button>
+            </div>
+
+            <div class="next-point-row">
+              <span>跳过</span>
+              <strong id="nextClickPoint">未记录</strong>
+              <button class="button" id="testNextClickBtn" type="button" disabled>测试</button>
+            </div>
+
+            <div class="score-map-head">
+              <span>分值坐标</span>
+              <button class="button" id="refreshScoreClickGridBtn" type="button">刷新分值</button>
+            </div>
+            <div class="score-click-grid" id="scoreClickGrid"></div>
           </div>
         </section>
 

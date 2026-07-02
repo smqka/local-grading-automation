@@ -1,27 +1,49 @@
-# API Contract Draft
+# API Contract
 
-This file records early API boundaries. Feature branches may update it as the grading API and UI are implemented.
+This document records the public local API boundaries used by the web UI.
 
-## Health
+## Web Health
 
 `GET /api/health`
 
-Response:
+Served by the Node web server.
 
 ```json
 {
   "ok": true,
   "service": "exam-grading-assistant",
   "hasOpenAiKey": true,
-  "gradingApiBaseUrl": "http://127.0.0.1:8765"
+  "gradingApiBaseUrl": "http://127.0.0.1:8765",
+  "gradingApi": {
+    "ok": true,
+    "statusCode": 200,
+    "hasOpenAiKey": true
+  }
 }
 ```
 
-## Browser Grading Proxy
+## Python Health
+
+`GET /health`
+
+Served by the Python grading API.
+
+```json
+{
+  "status": "ok",
+  "has_openai_key": true
+}
+```
+
+## Grade Answer
+
+Browser route:
 
 `POST /api/grade-answer`
 
-Implemented by the Node web server. It accepts the same payload shape as the Python grading API and forwards it to `GRADING_API_URL` or `GRADING_API_HOST:GRADING_API_PORT`.
+Python route:
+
+`POST /api/grade`
 
 Request:
 
@@ -30,9 +52,7 @@ Request:
   "question_id": "local-question-001",
   "max_score": 6,
   "standard_answer": "Teacher-provided standard answer.",
-  "standard_answer_image": null,
   "grading_rules": "Teacher-provided scoring rules.",
-  "grading_rules_image": null,
   "deduction_rules": "Teacher-provided deduction rules.",
   "allow_equivalent_answers": true,
   "score_by_steps": true,
@@ -51,12 +71,12 @@ Response:
   "max_score": 6,
   "confidence": 0.82,
   "needs_review": true,
-  "review_reason": "Confidence is below 0.90; teacher review is recommended.",
-  "deduction_points": [
-    "Calculation error in the second step."
+  "review_reason": "Confidence is below 0.70; teacher review is recommended.",
+  "deduction_points": [],
+  "student_answer_summary": "",
+  "uncertain_factors": [
+    "handwriting unclear"
   ],
-  "student_answer_summary": "Short model-visible answer summary.",
-  "uncertain_factors": [],
   "model": "gpt-4.1",
   "prompt_version": "grading-api-v1",
   "rule_version": "v1",
@@ -64,10 +84,74 @@ Response:
 }
 ```
 
-`standard_answer` and `grading_rules` may be empty strings when the matching `standard_answer_image` or `grading_rules_image` data URI is provided. Reference images must be PNG, JPEG, or WebP data URIs and are treated as teacher-provided grading material, not student work.
+## Parse Reference Image
 
-## Python Grading API
+Browser route:
 
-`POST /api/grade`
+`POST /api/parse-reference`
 
-This endpoint is served by `python -m grading_api.server`. Browser code should normally call `/api/grade-answer` on the Node server instead, so local API tokens and cross-port details stay out of frontend code.
+Python route:
+
+`POST /api/parse-reference`
+
+This route is optional. The recommended stable workflow is to manually enter and confirm standard-answer text and scoring rules.
+
+## Mouse Position
+
+Browser route:
+
+`GET /api/mouse-position`
+
+Python route:
+
+`GET /api/mouse-position`
+
+Response:
+
+```json
+{
+  "x": 1200,
+  "y": 800,
+  "screen": {
+    "left": 0,
+    "top": 0,
+    "width": 2560,
+    "height": 1600
+  }
+}
+```
+
+## Click Sequence
+
+Browser route:
+
+`POST /api/click-sequence`
+
+Python route:
+
+`POST /api/click-sequence`
+
+Request:
+
+```json
+{
+  "points": [
+    { "x": 1200, "y": 800 }
+  ],
+  "delay_ms": 0
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "clicked": [
+    { "x": 1200, "y": 800 }
+  ],
+  "delay_ms": 0
+}
+```
+
+Mouse endpoints are intended for local use only and should remain bound to `127.0.0.1`.

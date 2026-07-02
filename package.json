@@ -1,8 +1,8 @@
 {
-  "name": "exam-grading-assistant",
+  "name": "local-grading-automation",
   "version": "0.1.0",
   "private": true,
-  "description": "Teacher-confirmed AI assistant for grading math exam answers.",
+  "description": "Local AI-assisted grading and coordinate-click automation tool.",
   "type": "module",
   "scripts": {
     "dev": "node server/index.js",

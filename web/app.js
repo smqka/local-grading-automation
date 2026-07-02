@@ -1,7 +1,13 @@
 const CONFIG_KEY = "exam-grading-assistant:question-config:v1";
 const CROP_KEY = "exam-grading-assistant:crop-box:v1";
+const CLICK_CONFIG_KEY = "exam-grading-assistant:click-config:v1";
 const HISTORY_KEY = "exam-grading-assistant:history:v1";
 const MAX_HISTORY_ITEMS = 8;
+const CROP_OUTPUT_SCALE = 2;
+const CROP_ENHANCE_FILTER = "brightness(1.03) contrast(1.08)";
+const DEFAULT_CONFIDENCE_THRESHOLD_PERCENT = 80;
+const COORDINATE_CAPTURE_DELAY_MS = 2500;
+const DEFAULT_PAGE_REFRESH_DELAY_MS = 1000;
 
 const elements = {
   healthStatus: document.querySelector("#healthStatus"),
@@ -18,7 +24,6 @@ const elements = {
   cropCanvas: document.querySelector("#cropCanvas"),
   cropEmpty: document.querySelector("#cropEmpty"),
   cropSize: document.querySelector("#cropSize"),
-  privacyConfirm: document.querySelector("#privacyConfirm"),
   gradingForm: document.querySelector("#gradingForm"),
   submitGradeBtn: document.querySelector("#submitGradeBtn"),
   clearConfigBtn: document.querySelector("#clearConfigBtn"),
@@ -29,11 +34,24 @@ const elements = {
   suggestedScore: document.querySelector("#suggestedScore"),
   confidence: document.querySelector("#confidence"),
   modelName: document.querySelector("#modelName"),
-  answerSummary: document.querySelector("#answerSummary"),
-  deductionList: document.querySelector("#deductionList"),
   uncertainList: document.querySelector("#uncertainList"),
   reviewReason: document.querySelector("#reviewReason"),
-  historyList: document.querySelector("#historyList")
+  historyList: document.querySelector("#historyList"),
+  autoClickEnabled: document.querySelector("#autoClickEnabled"),
+  confidenceThreshold: document.querySelector("#confidenceThreshold"),
+  lowConfidenceAction: document.querySelector("#lowConfidenceAction"),
+  pageRefreshDelayMs: document.querySelector("#pageRefreshDelayMs"),
+  clickStatus: document.querySelector("#clickStatus"),
+  mousePosition: document.querySelector("#mousePosition"),
+  refreshMouseBtn: document.querySelector("#refreshMouseBtn"),
+  recordNextClickBtn: document.querySelector("#recordNextClickBtn"),
+  testNextClickBtn: document.querySelector("#testNextClickBtn"),
+  nextClickPoint: document.querySelector("#nextClickPoint"),
+  startAutoFlowBtn: document.querySelector("#startAutoFlowBtn"),
+  pauseAutoFlowBtn: document.querySelector("#pauseAutoFlowBtn"),
+  continueAutoFlowBtn: document.querySelector("#continueAutoFlowBtn"),
+  refreshScoreClickGridBtn: document.querySelector("#refreshScoreClickGridBtn"),
+  scoreClickGrid: document.querySelector("#scoreClickGrid")
 };
 
 const fields = {
@@ -42,9 +60,7 @@ const fields = {
   scorePrecision: document.querySelector("#scorePrecision"),
   ruleVersion: document.querySelector("#ruleVersion"),
   standardAnswer: document.querySelector("#standardAnswer"),
-  standardAnswerImage: document.querySelector("#standardAnswerImage"),
   gradingRules: document.querySelector("#gradingRules"),
-  gradingRulesImage: document.querySelector("#gradingRulesImage"),
   deductionRules: document.querySelector("#deductionRules"),
   allowEquivalentAnswers: document.querySelector("#allowEquivalentAnswers"),
   scoreBySteps: document.querySelector("#scoreBySteps")
@@ -53,12 +69,19 @@ const fields = {
 let mediaStream = null;
 let cropRect = null;
 let croppedImage = "";
-const referenceImages = {
-  standard_answer_image: null,
-  grading_rules_image: null
-};
 let dragStart = null;
 let isSubmitting = false;
+let isRecordingPoint = false;
+let autoFlowState = "idle";
+let autoRunId = 0;
+let clickConfig = {
+  enabled: false,
+  confidence_threshold_percent: DEFAULT_CONFIDENCE_THRESHOLD_PERCENT,
+  low_confidence_action: "review",
+  page_delay_ms: DEFAULT_PAGE_REFRESH_DELAY_MS,
+  next: null,
+  scores: {}
+};
 
 function updatePreviewAspectRatio() {
   if (!elements.captureVideo.videoWidth || !elements.captureVideo.videoHeight) {
@@ -136,9 +159,11 @@ async function startCapture() {
   updatePreviewAspectRatio();
   restoreCropBox();
   refreshSubmitState();
+  updateAutoFlowControls();
 }
 
 function stopCapture() {
+  pauseAutoFlow("捕获已停止，自动批卷暂停。");
   if (mediaStream) {
     for (const track of mediaStream.getTracks()) {
       track.stop();
@@ -155,6 +180,7 @@ function stopCapture() {
   clearCroppedImage();
   setCaptureStatus("捕获已停止。", "warning");
   refreshSubmitState();
+  updateAutoFlowControls();
 }
 
 function beginSelection(event) {
@@ -229,17 +255,31 @@ function renderCropBox() {
 }
 
 function captureCrop() {
-  if (!mediaStream || !cropRect || !elements.captureVideo.videoWidth || !elements.captureVideo.videoHeight) {
-    setCaptureStatus("请先捕获画面并框选答案区域。", "warning");
+  if (!mediaStream) {
+    setCaptureStatus("请先点击“开始捕获”，选择要批阅的窗口。", "warning");
     refreshSubmitState();
-    return;
+    return false;
+  }
+
+  if (!cropRect) {
+    setCaptureStatus("请在上方预览画面按住鼠标左键拖拽，框选学生答案区域。", "warning");
+    elements.cropSize.textContent = "请先拖拽框选";
+    emphasizePreviewFrame();
+    refreshSubmitState();
+    return false;
+  }
+
+  if (!elements.captureVideo.videoWidth || !elements.captureVideo.videoHeight) {
+    setCaptureStatus("捕获画面还未准备好，请稍等一秒后重试。", "warning");
+    refreshSubmitState();
+    return false;
   }
 
   const videoBounds = elements.captureVideo.getBoundingClientRect();
   if (!videoBounds.width || !videoBounds.height) {
     setCaptureStatus("捕获画面尺寸异常，请重新开始捕获。", "error");
     refreshSubmitState();
-    return;
+    return false;
   }
 
   const scaleX = elements.captureVideo.videoWidth / videoBounds.width;
@@ -252,12 +292,18 @@ function captureCrop() {
   if (sourceWidth <= 0 || sourceHeight <= 0) {
     setCaptureStatus("裁剪区域无效，请重新框选。", "error");
     refreshSubmitState();
-    return;
+    return false;
   }
 
-  elements.cropCanvas.width = sourceWidth;
-  elements.cropCanvas.height = sourceHeight;
+  const outputWidth = sourceWidth * CROP_OUTPUT_SCALE;
+  const outputHeight = sourceHeight * CROP_OUTPUT_SCALE;
+
+  elements.cropCanvas.width = outputWidth;
+  elements.cropCanvas.height = outputHeight;
   const context = elements.cropCanvas.getContext("2d", { willReadFrequently: false });
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.filter = CROP_ENHANCE_FILTER;
   context.drawImage(
     elements.captureVideo,
     sourceX,
@@ -266,16 +312,24 @@ function captureCrop() {
     sourceHeight,
     0,
     0,
-    sourceWidth,
-    sourceHeight
+    outputWidth,
+    outputHeight
   );
 
   croppedImage = elements.cropCanvas.toDataURL("image/png");
-  elements.privacyConfirm.checked = false;
   elements.cropEmpty.classList.add("is-hidden");
-  elements.cropSize.textContent = `裁剪图 ${sourceWidth} × ${sourceHeight} px`;
-  setCaptureStatus("裁剪图已更新，提交前请确认不含学生身份信息。", "ready");
+  elements.cropSize.textContent = `裁剪图 ${sourceWidth} × ${sourceHeight} px，提交图 ${outputWidth} × ${outputHeight} px`;
+  setCaptureStatus("裁剪图已更新。", "ready");
   refreshSubmitState();
+  return true;
+}
+
+function emphasizePreviewFrame() {
+  elements.previewFrame.classList.add("is-attention");
+  window.clearTimeout(emphasizePreviewFrame.timer);
+  emphasizePreviewFrame.timer = window.setTimeout(() => {
+    elements.previewFrame.classList.remove("is-attention");
+  }, 1400);
 }
 
 function restoreCropBox() {
@@ -332,6 +386,7 @@ function saveConfig() {
     elements.saveStatus.textContent = "本地保存";
   }, 1200);
   refreshSubmitState();
+  renderScoreClickGrid();
 }
 
 function collectConfig() {
@@ -354,36 +409,483 @@ function collectPayload(config) {
     question_id: config.question_id || null,
     rule_version: config.rule_version || null,
     mode: "suggest_only",
-    image: croppedImage,
-    standard_answer_image: referenceImages.standard_answer_image?.dataUri || null,
-    grading_rules_image: referenceImages.grading_rules_image?.dataUri || null
+    image: croppedImage
   };
 }
 
-async function submitGrade(event) {
-  event.preventDefault();
+function loadClickConfig() {
+  const saved = readStorage(CLICK_CONFIG_KEY) || {};
+  clickConfig = {
+    enabled: Boolean(saved.enabled),
+    confidence_threshold_percent: normalizeConfidenceThresholdPercent(
+      saved.confidence_threshold_percent ?? saved.confidence_threshold
+    ),
+    low_confidence_action: saved.low_confidence_action === "skip" ? "skip" : "review",
+    page_delay_ms: normalizePageDelayMs(saved.page_delay_ms),
+    next: sanitizePoint(saved.next),
+    scores: sanitizeScorePoints(saved.scores)
+  };
 
-  if (isSubmitting || !croppedImage) {
+  elements.autoClickEnabled.checked = clickConfig.enabled;
+  elements.confidenceThreshold.value = String(clickConfig.confidence_threshold_percent);
+  elements.lowConfidenceAction.value = clickConfig.low_confidence_action;
+  elements.pageRefreshDelayMs.value = formatDelaySeconds(clickConfig.page_delay_ms);
+  renderClickPanel();
+  updateAutoFlowControls();
+}
+
+function saveClickConfig() {
+  clickConfig.enabled = elements.autoClickEnabled.checked;
+  clickConfig.confidence_threshold_percent = normalizeConfidenceThresholdPercent(elements.confidenceThreshold.value);
+  clickConfig.low_confidence_action = elements.lowConfidenceAction.value === "skip" ? "skip" : "review";
+  clickConfig.page_delay_ms = normalizePageDelaySecondsToMs(elements.pageRefreshDelayMs.value);
+  writeStorage(CLICK_CONFIG_KEY, clickConfig);
+  renderClickPanel();
+}
+
+function renderClickPanel() {
+  if (autoFlowState === "idle") {
+    elements.clickStatus.textContent = clickConfig.enabled ? "已启用" : "未启用";
+    elements.clickStatus.dataset.state = clickConfig.enabled ? "ready" : "warning";
+  }
+  elements.nextClickPoint.textContent = formatPoint(clickConfig.next);
+  elements.testNextClickBtn.disabled = !clickConfig.next;
+  renderScoreClickGrid();
+  updateAutoFlowControls();
+}
+
+function renderScoreClickGrid() {
+  elements.scoreClickGrid.replaceChildren();
+  const values = buildScoreValues();
+
+  if (!values.length) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = "暂无分值";
+    elements.scoreClickGrid.append(empty);
     return;
   }
 
-  if (!elements.privacyConfirm.checked) {
-    setResultStatus("请先确认裁剪图不含学生身份信息。", "warning");
-    refreshSubmitState();
+  if (values.length > 240) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = "分值过多";
+    elements.scoreClickGrid.append(empty);
     return;
   }
 
+  for (const value of values) {
+    const key = scoreKey(value);
+    const row = document.createElement("div");
+    row.className = "score-click-item";
+
+    const label = document.createElement("span");
+    label.textContent = formatScore(value);
+
+    const pointLabel = document.createElement("strong");
+    pointLabel.textContent = formatPoint(clickConfig.scores[key]);
+
+    const button = document.createElement("button");
+    button.className = "button";
+    button.type = "button";
+    button.textContent = "记录";
+    button.addEventListener("click", () => recordScoreClickPoint(value));
+
+    row.append(label, pointLabel, button);
+    elements.scoreClickGrid.append(row);
+  }
+}
+
+function buildScoreValues() {
+  const maxScore = Number(fields.maxScore.value);
+  if (!Number.isFinite(maxScore) || maxScore < 0) {
+    return [];
+  }
+
+  const step = getScoreStep();
+  const values = [];
+  const count = Math.floor(maxScore / step + 1e-8);
+  for (let index = 0; index <= count; index += 1) {
+    values.push(roundScore(index * step));
+  }
+
+  const roundedMax = roundScore(maxScore);
+  if (!values.length || scoreKey(values[values.length - 1]) !== scoreKey(roundedMax)) {
+    values.push(roundedMax);
+  }
+  return values;
+}
+
+function getScoreStep() {
+  if (fields.scorePrecision.value === "integer") {
+    return 1;
+  }
+
+  const step = Number(fields.scorePrecision.value);
+  return Number.isFinite(step) && step > 0 ? step : 0.5;
+}
+
+async function refreshMousePosition() {
+  try {
+    const point = await fetchMousePosition();
+    elements.mousePosition.textContent = formatPoint(point);
+    setClickStatus("已读取坐标", "ready");
+    return point;
+  } catch (error) {
+    setClickStatus(error.message || "读取坐标失败", "error");
+    return null;
+  }
+}
+
+async function fetchMousePosition() {
+  const response = await fetch("/api/mouse-position", { cache: "no-store" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || "读取坐标失败");
+  }
+
+  const point = sanitizePoint(payload);
+  if (!point) {
+    throw new Error("坐标数据无效");
+  }
+  return point;
+}
+
+async function recordNextClickPoint() {
+  const point = await captureMouseAfterDelay("跳过");
+  if (!point) {
+    return;
+  }
+
+  clickConfig.next = point;
+  saveClickConfig();
+  setClickStatus("已记录跳过坐标", "ready");
+}
+
+async function recordScoreClickPoint(value) {
+  const point = await captureMouseAfterDelay(`${formatScore(value)} 分`);
+  if (!point) {
+    return;
+  }
+
+  clickConfig.scores[scoreKey(value)] = point;
+  saveClickConfig();
+  setClickStatus(`已记录 ${formatScore(value)} 分坐标`, "ready");
+}
+
+async function captureMouseAfterDelay(label) {
+  if (isRecordingPoint) {
+    setClickStatus("正在记录坐标", "warning");
+    return null;
+  }
+
+  isRecordingPoint = true;
+  setClickStatus(`${label}：2.5 秒后读取鼠标位置`, "warning");
+  try {
+    await wait(COORDINATE_CAPTURE_DELAY_MS);
+    return await refreshMousePosition();
+  } finally {
+    isRecordingPoint = false;
+  }
+}
+
+async function testNextClickPoint() {
+  if (!clickConfig.next) {
+    setClickStatus("未记录跳过坐标", "warning");
+    return;
+  }
+
+  try {
+    await executeClickSequence([clickConfig.next]);
+    setClickStatus("已测试跳过点击", "ready");
+  } catch (error) {
+    setClickStatus(error.message || "测试点击失败", "error");
+  }
+}
+
+async function maybeAutoClick(result) {
+  if (!clickConfig.enabled) {
+    setClickStatus("自动点击未启用", "warning");
+    return false;
+  }
+
+  const suggestedScore = Number(result.suggested_score);
+  const score = roundScoreToPrecision(suggestedScore);
+  const scorePoint = clickConfig.scores[scoreKey(score)] || clickConfig.scores[scoreKey(suggestedScore)];
+  if (!scorePoint) {
+    setClickStatus(`缺少 ${formatScore(score)} 分坐标`, "warning");
+    return false;
+  }
+
+  try {
+    await executeClickSequence([scorePoint]);
+    setClickStatus("已点击分数，等待系统自动翻页", "ready");
+    return true;
+  } catch (error) {
+    setClickStatus(error.message || "自动点击失败", "error");
+    return false;
+  }
+}
+
+async function clickNextPageOnly() {
+  if (!clickConfig.next) {
+    throw new Error("缺少跳过坐标");
+  }
+  await executeClickSequence([clickConfig.next]);
+}
+
+function decideAutoAction(result) {
+  const confidence = Number(result.confidence || 0);
+  const suggestedScore = Number(result.suggested_score);
+  const threshold = getConfidenceThreshold();
+  const canAutoScore = confidence >= threshold && !result.needs_review && Number.isFinite(suggestedScore);
+
+  if (canAutoScore) {
+    return "score";
+  }
+  return clickConfig.low_confidence_action === "skip" ? "skip" : "review";
+}
+
+function validateAutoFlowStart() {
+  if (!clickConfig.enabled) {
+    return "请先启用自动点击";
+  }
+  if (!mediaStream) {
+    return "请先开始捕获阅卷窗口";
+  }
+  if (!cropRect) {
+    return "请先框选答案区域";
+  }
+  if (clickConfig.low_confidence_action === "skip" && !clickConfig.next) {
+    return "低于阈值设为自动跳过时，请先记录跳过坐标";
+  }
+
+  const validationMessage = validateConfig(collectConfig());
+  if (validationMessage) {
+    return validationMessage;
+  }
+  return "";
+}
+
+async function startAutoFlow() {
+  const validationMessage = validateAutoFlowStart();
+  if (validationMessage) {
+    setClickStatus(validationMessage, "warning");
+    return;
+  }
+
+  autoFlowState = "running";
+  autoRunId += 1;
+  const runId = autoRunId;
+  setClickStatus("自动批卷中", "ready");
+  updateAutoFlowControls();
+  await runAutoLoop(runId);
+}
+
+function pauseAutoFlow(message = "已暂停") {
+  if (autoFlowState !== "running") {
+    return;
+  }
+
+  autoFlowState = "paused";
+  autoRunId += 1;
+  setClickStatus(message, "warning");
+  updateAutoFlowControls();
+  refreshSubmitState();
+}
+
+async function continueAutoFlow() {
+  const validationMessage = validateAutoFlowStart();
+  if (validationMessage) {
+    setClickStatus(validationMessage, "warning");
+    return;
+  }
+
+  autoFlowState = "running";
+  autoRunId += 1;
+  const runId = autoRunId;
+  setClickStatus("继续批卷中", "ready");
+  updateAutoFlowControls();
+  await runAutoLoop(runId, getPageRefreshDelayMs());
+}
+
+async function runAutoLoop(runId, initialDelayMs = 0) {
+  let delayBeforeCapture = normalizePageDelayMs(initialDelayMs);
+
+  while (isAutoRunActive(runId)) {
+    if (delayBeforeCapture > 0) {
+      setClickStatus(`${delayBeforeCapture}ms 后刷新截图`, "ready");
+      await wait(delayBeforeCapture);
+      if (!isAutoRunActive(runId)) {
+        return;
+      }
+    }
+
+    if (!captureCrop()) {
+      pauseAutoFlow("刷新截图失败，已暂停");
+      return;
+    }
+
+    let result;
+    try {
+      result = await requestGradeResult("自动批卷中：等待模型返回。");
+    } catch (error) {
+      if (!isAutoRunActive(runId)) {
+        return;
+      }
+      renderError(error.message || "评分请求失败");
+      pauseAutoFlow("评分失败，已暂停");
+      return;
+    }
+
+    if (!isAutoRunActive(runId)) {
+      return;
+    }
+
+    const action = decideAutoAction(result);
+    const autoAccepted = action === "score";
+    renderResult(result, { autoAccepted, action });
+
+    if (action === "score") {
+      if (!(await maybeAutoClick(result))) {
+        pauseAutoFlow("自动点击失败，已暂停");
+        return;
+      }
+      addHistoryItem(result, { autoAccepted: true });
+      delayBeforeCapture = getPageRefreshDelayMs();
+      continue;
+    }
+
+    if (action === "skip") {
+      try {
+        await clickNextPageOnly();
+      } catch (error) {
+        setClickStatus(error.message || "自动跳过失败", "error");
+        pauseAutoFlow("自动跳过失败，已暂停");
+        return;
+      }
+      addHistoryItem(result, { skipped: true });
+      setResultStatus(`置信度低于 ${formatPercent(getConfidenceThreshold())}，已自动跳过。`, "warning");
+      setClickStatus("已跳过，等待页面切换", "ready");
+      delayBeforeCapture = getPageRefreshDelayMs();
+      continue;
+    }
+
+    addHistoryItem(result, { needsManual: true });
+    setResultStatus(`置信度低于 ${formatPercent(getConfidenceThreshold())}，等待人工审核。`, "warning");
+    pauseAutoFlow("等待人工审核，处理后点继续");
+    return;
+  }
+}
+
+function isAutoRunActive(runId) {
+  return autoFlowState === "running" && autoRunId === runId;
+}
+
+function updateAutoFlowControls() {
+  const isRunning = autoFlowState === "running";
+  const isPaused = autoFlowState === "paused";
+
+  elements.startAutoFlowBtn.disabled = isRunning || isPaused || isSubmitting;
+  elements.pauseAutoFlowBtn.disabled = !isRunning;
+  elements.continueAutoFlowBtn.disabled = !isPaused || isSubmitting;
+}
+
+async function executeClickSequence(points) {
+  const response = await fetch("/api/click-sequence", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      points,
+      delay_ms: 0
+    })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || "点击失败");
+  }
+  return payload;
+}
+
+function sanitizeScorePoints(scores) {
+  const result = {};
+  if (!scores || typeof scores !== "object") {
+    return result;
+  }
+
+  for (const [key, value] of Object.entries(scores)) {
+    const point = sanitizePoint(value);
+    if (point) {
+      result[scoreKey(key)] = point;
+    }
+  }
+  return result;
+}
+
+function sanitizePoint(point) {
+  if (!point || typeof point !== "object") {
+    return null;
+  }
+
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function normalizePageDelayMs(value) {
+  const delay = Number(value);
+  if (!Number.isFinite(delay)) {
+    return DEFAULT_PAGE_REFRESH_DELAY_MS;
+  }
+  return Math.round(clamp(delay, 0, 5000));
+}
+
+function normalizePageDelaySecondsToMs(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) {
+    return DEFAULT_PAGE_REFRESH_DELAY_MS;
+  }
+  return Math.round(clamp(seconds, 0, 5) * 1000);
+}
+
+function getPageRefreshDelayMs() {
+  return normalizePageDelaySecondsToMs(elements.pageRefreshDelayMs.value);
+}
+
+function normalizeConfidenceThresholdPercent(value) {
+  const threshold = Number(value);
+  if (!Number.isFinite(threshold)) {
+    return DEFAULT_CONFIDENCE_THRESHOLD_PERCENT;
+  }
+  if (threshold > 0 && threshold <= 1) {
+    return Math.round(clamp(threshold * 100, 1, 100));
+  }
+  return Math.round(clamp(threshold, 1, 100));
+}
+
+function getConfidenceThreshold() {
+  return normalizeConfidenceThresholdPercent(elements.confidenceThreshold.value) / 100;
+}
+
+async function requestGradeResult(statusText = "正在请求评分 API。") {
   const config = collectConfig();
   const validationMessage = validateConfig(config);
   if (validationMessage) {
-    setResultStatus(validationMessage, "error");
-    return;
+    throw new Error(validationMessage);
+  }
+  if (!croppedImage) {
+    throw new Error("请先框选答案区域并生成裁剪图。");
   }
 
   isSubmitting = true;
   elements.submitGradeBtn.disabled = true;
   elements.submitGradeBtn.textContent = "评分中";
-  setResultStatus("正在请求评分 API。", "ready");
+  setResultStatus(statusText, "ready");
 
   try {
     const response = await fetch("/api/grade-answer", {
@@ -399,18 +901,38 @@ async function submitGrade(event) {
       throw new Error(result.message || result.error || "评分请求失败");
     }
 
-    renderResult(result);
-    addHistoryItem(result);
+    return result;
   } catch (error) {
-    const message =
-      error.message === "grading_api_unavailable"
-        ? "评分 API 暂不可用，请先启动 Python 服务。"
-        : error.message || "评分请求失败";
-    renderError(message);
+    if (error.message === "grading_api_unavailable") {
+      throw new Error("评分 API 暂不可用，请先启动 Python 服务。");
+    }
+    throw error;
   } finally {
     isSubmitting = false;
     elements.submitGradeBtn.textContent = "获取建议分";
     refreshSubmitState();
+    updateAutoFlowControls();
+  }
+}
+
+async function submitGrade(event) {
+  event.preventDefault();
+
+  if (isSubmitting || autoFlowState === "running") {
+    return;
+  }
+
+  if (!croppedImage && mediaStream && cropRect) {
+    captureCrop();
+  }
+
+  try {
+    const result = await requestGradeResult();
+    const autoAccepted = isAutoAccepted(result);
+    renderResult(result, { autoAccepted });
+    addHistoryItem(result, { autoAccepted: false, mode: "manual" });
+  } catch (error) {
+    renderError(error.message || "评分请求失败");
   }
 }
 
@@ -418,30 +940,38 @@ function validateConfig(config) {
   if (!Number.isFinite(config.max_score) || config.max_score <= 0) {
     return "满分必须大于 0。";
   }
-  if (!config.standard_answer && !referenceImages.standard_answer_image) {
-    return "请填写标准答案，或选择标准答案图片。";
+  if (!config.standard_answer) {
+    return "请先填写标准答案。";
   }
-  if (!config.grading_rules && !referenceImages.grading_rules_image) {
-    return "请填写给分规则，或选择给分规则图片。";
+  if (!config.grading_rules) {
+    return "请先填写每步给分规则。";
   }
   return "";
 }
 
-function renderResult(result) {
+function renderResult(result, options = {}) {
+  const autoAccepted = Boolean(options.autoAccepted);
   elements.suggestedScore.textContent =
     result.suggested_score === null || result.suggested_score === undefined
       ? `待复核 / ${formatScore(result.max_score)}`
       : `${formatScore(result.suggested_score)} / ${formatScore(result.max_score)}`;
   elements.confidence.textContent = `${Math.round((result.confidence || 0) * 100)}%`;
   elements.modelName.textContent = result.model || "--";
-  elements.answerSummary.textContent = result.student_answer_summary || "未返回摘要";
-  renderList(elements.deductionList, result.deduction_points, "无明确扣分点");
   renderList(elements.uncertainList, result.uncertain_factors, "无明显不确定因素");
 
-  elements.reviewBadge.textContent = result.needs_review ? "需要复核" : "可参考";
-  elements.reviewBadge.dataset.state = result.needs_review ? "warning" : "ready";
+  elements.reviewBadge.textContent = autoAccepted ? "高置信度" : result.needs_review ? "需要复核" : "可参考";
+  elements.reviewBadge.dataset.state = autoAccepted ? "ready" : result.needs_review ? "warning" : "ready";
   elements.reviewReason.textContent = result.review_reason || "";
-  setResultStatus("评分完成，老师仍需自行确认并手动录分。", result.needs_review ? "warning" : "ready");
+  if (autoAccepted) {
+    setResultStatus(
+      options.action === "score"
+        ? `置信度达到 ${formatPercent(getConfidenceThreshold())}，准备自动点击。`
+        : `置信度达到 ${formatPercent(getConfidenceThreshold())}，建议分可参考。`,
+      "ready"
+    );
+  } else {
+    setResultStatus("评分完成，请人工确认后再使用。", result.needs_review ? "warning" : "ready");
+  }
 }
 
 function renderError(message) {
@@ -461,7 +991,7 @@ function renderList(list, items, emptyText) {
   }
 }
 
-function addHistoryItem(result) {
+function addHistoryItem(result, options = {}) {
   const history = readStorage(HISTORY_KEY) || [];
   const item = {
     time: new Date().toISOString(),
@@ -470,7 +1000,10 @@ function addHistoryItem(result) {
     max_score: result.max_score,
     confidence: result.confidence,
     needs_review: result.needs_review,
-    review_reason: result.review_reason || ""
+    review_reason: result.review_reason || "",
+    auto_accepted: Boolean(options.autoAccepted),
+    skipped: Boolean(options.skipped),
+    needs_manual: Boolean(options.needsManual)
   };
 
   writeStorage(HISTORY_KEY, [item, ...history].slice(0, MAX_HISTORY_ITEMS));
@@ -502,9 +1035,16 @@ function renderHistory() {
 
     const meta = document.createElement("span");
     const time = new Date(item.time);
+    const state = item.skipped
+      ? "自动跳过"
+      : item.auto_accepted
+        ? "自动打分"
+        : item.needs_manual || item.needs_review
+          ? "等待审核"
+          : "可参考";
     meta.textContent = `${Number.isNaN(time.getTime()) ? "" : time.toLocaleTimeString()} · 置信度 ${Math.round(
       (item.confidence || 0) * 100
-    )}% · ${item.needs_review ? "需要复核" : "可参考"}`;
+    )}% · ${state}`;
 
     row.append(main, meta);
     elements.historyList.append(row);
@@ -520,11 +1060,10 @@ function clearConfig() {
       field.value = field.id === "maxScore" ? "6" : "";
     }
   }
-  clearReferenceImage("standard_answer_image");
-  clearReferenceImage("grading_rules_image");
   fields.scorePrecision.value = "0.5";
   elements.saveStatus.textContent = "已清空";
   refreshSubmitState();
+  renderScoreClickGrid();
 }
 
 function clearHistory() {
@@ -534,112 +1073,24 @@ function clearHistory() {
 
 function clearCroppedImage() {
   croppedImage = "";
-  elements.privacyConfirm.checked = false;
   elements.cropCanvas.width = 0;
   elements.cropCanvas.height = 0;
   elements.cropEmpty.classList.remove("is-hidden");
+}
+
+function isAutoAccepted(result) {
+  const confidence = Number(result.confidence || 0);
+  const suggestedScore = Number(result.suggested_score);
+  return confidence >= getConfidenceThreshold() && !result.needs_review && Number.isFinite(suggestedScore);
 }
 
 function refreshSubmitState() {
   const config = collectConfig();
   elements.submitGradeBtn.disabled =
     isSubmitting ||
+    autoFlowState === "running" ||
     !croppedImage ||
-    !elements.privacyConfirm.checked ||
     Boolean(validateConfig(config));
-}
-
-async function handleReferenceImageChange(event, key) {
-  const file = event.target.files?.[0];
-  if (!file) {
-    clearReferenceImage(key);
-    return;
-  }
-
-  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-    setResultStatus("参考图片只支持 PNG、JPEG 或 WebP。", "error");
-    clearReferenceImage(key);
-    return;
-  }
-
-  try {
-    const dataUri = await readFileAsDataUri(file);
-    referenceImages[key] = {
-      dataUri,
-      name: file.name,
-      size: file.size,
-      type: file.type
-    };
-    renderReferenceImage(key);
-    refreshSubmitState();
-  } catch {
-    setResultStatus("参考图片读取失败，请重新选择。", "error");
-    clearReferenceImage(key);
-  }
-}
-
-function renderReferenceImage(key) {
-  const reference = getReferenceElements(key);
-  const image = referenceImages[key];
-  if (!image) {
-    reference.preview.classList.add("is-hidden");
-    reference.previewImg.removeAttribute("src");
-    reference.meta.textContent = "";
-    reference.removeBtn.disabled = true;
-    return;
-  }
-
-  reference.preview.classList.remove("is-hidden");
-  reference.previewImg.src = image.dataUri;
-  reference.meta.textContent = `${image.name} · ${formatBytes(image.size)}`;
-  reference.removeBtn.disabled = false;
-}
-
-function clearReferenceImage(key) {
-  referenceImages[key] = null;
-  const reference = getReferenceElements(key);
-  reference.input.value = "";
-  renderReferenceImage(key);
-  refreshSubmitState();
-}
-
-function getReferenceElements(key) {
-  if (key === "standard_answer_image") {
-    return {
-      input: fields.standardAnswerImage,
-      preview: document.querySelector("#standardAnswerImagePreview"),
-      previewImg: document.querySelector("#standardAnswerImagePreviewImg"),
-      meta: document.querySelector("#standardAnswerImageMeta"),
-      removeBtn: document.querySelector("#removeStandardAnswerImageBtn")
-    };
-  }
-
-  return {
-    input: fields.gradingRulesImage,
-    preview: document.querySelector("#gradingRulesImagePreview"),
-    previewImg: document.querySelector("#gradingRulesImagePreviewImg"),
-    meta: document.querySelector("#gradingRulesImageMeta"),
-    removeBtn: document.querySelector("#removeGradingRulesImageBtn")
-  };
-}
-
-function readFileAsDataUri(file) {
-  return new Promise((resolveRead, rejectRead) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolveRead(reader.result));
-    reader.addEventListener("error", rejectRead);
-    reader.readAsDataURL(file);
-  });
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function setCaptureStatus(message, state) {
@@ -650,6 +1101,11 @@ function setCaptureStatus(message, state) {
 function setResultStatus(message, state) {
   elements.resultStatus.textContent = message;
   elements.resultStatus.dataset.state = state;
+}
+
+function setClickStatus(message, state) {
+  elements.clickStatus.textContent = message;
+  elements.clickStatus.dataset.state = state;
 }
 
 function readStorage(key) {
@@ -669,8 +1125,46 @@ function formatScore(value) {
   return Number(value).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
 
+function formatPercent(value) {
+  return `${Math.round(Number(value || 0) * 100)}%`;
+}
+
+function formatDelaySeconds(ms) {
+  const seconds = normalizePageDelayMs(ms) / 1000;
+  return Number(seconds.toFixed(1)).toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+}
+
+function formatPoint(point) {
+  return point ? `${point.x}, ${point.y}` : "未记录";
+}
+
+function scoreKey(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "";
+  }
+  return roundScore(number)
+    .toFixed(2)
+    .replace(/\.?0+$/, "");
+}
+
+function roundScore(value) {
+  return Math.round(Number(value) * 100) / 100;
+}
+
+function roundScoreToPrecision(value) {
+  const step = getScoreStep();
+  return roundScore(Math.round(Number(value) / step) * step);
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 for (const field of Object.values(fields)) {
@@ -690,24 +1184,26 @@ elements.selectionOverlay.addEventListener("pointerdown", beginSelection);
 elements.selectionOverlay.addEventListener("pointermove", updateSelection);
 elements.selectionOverlay.addEventListener("pointerup", endSelection);
 elements.selectionOverlay.addEventListener("pointercancel", endSelection);
-elements.privacyConfirm.addEventListener("change", refreshSubmitState);
 elements.gradingForm.addEventListener("submit", submitGrade);
 elements.clearConfigBtn.addEventListener("click", clearConfig);
 elements.clearHistoryBtn.addEventListener("click", clearHistory);
-fields.standardAnswerImage.addEventListener("change", (event) =>
-  handleReferenceImageChange(event, "standard_answer_image")
-);
-fields.gradingRulesImage.addEventListener("change", (event) =>
-  handleReferenceImageChange(event, "grading_rules_image")
-);
-document
-  .querySelector("#removeStandardAnswerImageBtn")
-  .addEventListener("click", () => clearReferenceImage("standard_answer_image"));
-document
-  .querySelector("#removeGradingRulesImageBtn")
-  .addEventListener("click", () => clearReferenceImage("grading_rules_image"));
+elements.autoClickEnabled.addEventListener("change", () => {
+  clickConfig.enabled = elements.autoClickEnabled.checked;
+  saveClickConfig();
+});
+elements.confidenceThreshold.addEventListener("input", saveClickConfig);
+elements.lowConfidenceAction.addEventListener("change", saveClickConfig);
+elements.pageRefreshDelayMs.addEventListener("input", saveClickConfig);
+elements.refreshMouseBtn.addEventListener("click", refreshMousePosition);
+elements.recordNextClickBtn.addEventListener("click", recordNextClickPoint);
+elements.testNextClickBtn.addEventListener("click", testNextClickPoint);
+elements.startAutoFlowBtn.addEventListener("click", startAutoFlow);
+elements.pauseAutoFlowBtn.addEventListener("click", () => pauseAutoFlow());
+elements.continueAutoFlowBtn.addEventListener("click", continueAutoFlow);
+elements.refreshScoreClickGridBtn.addEventListener("click", renderScoreClickGrid);
 
 loadConfig();
+loadClickConfig();
 renderHistory();
 refreshSubmitState();
 checkHealth();

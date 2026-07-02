@@ -1,17 +1,24 @@
 import io
+import http.client
 import json
 import unittest
 import urllib.error
+from unittest.mock import patch
+from unittest.mock import Mock
 
 from grading_api.config import Settings
+from grading_api.errors import UpstreamError
 from grading_api.openai_client import (
     OpenAIResponsesClient,
+    _get_first_path,
+    _image_upload_response_paths,
     _safe_error_detail,
     _safe_upstream_message,
     build_user_prompt,
+    build_reference_parse_prompt,
     extract_output_text,
 )
-from grading_api.validation import parse_grade_request
+from grading_api.validation import parse_grade_request, parse_reference_parse_request
 
 from tests.test_grading_service import valid_payload
 
@@ -56,23 +63,104 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         self.assertIn("x = 2", prompt)
         self.assertIn("Equation 2 points", prompt)
         self.assertIn("Max score: 6.0", prompt)
+        self.assertIn("Inspect the student image internally", prompt)
+        self.assertIn("Do not infer missing or unclear work", prompt)
+        self.assertIn("Keep student_answer_summary empty", prompt)
 
-    def test_payload_includes_reference_images(self):
-        payload = valid_payload()
-        payload["standard_answer"] = ""
-        payload["grading_rules"] = ""
-        payload["standard_answer_image"] = payload["image"]
-        payload["grading_rules_image"] = payload["image"]
-        request = parse_grade_request(payload, max_image_bytes=1024)
+    def test_grade_payload_uses_only_student_answer_image(self):
+        request = parse_grade_request(valid_payload(), max_image_bytes=1024)
         client = OpenAIResponsesClient(settings())
 
-        body = client._build_payload(request)
-        content = body["input"][0]["content"]
-        image_urls = [item["image_url"] for item in content if item["type"] == "input_image"]
+        body = client._build_chat_payload(request)
+        content = body["messages"][1]["content"]
+        image_urls = [item["image_url"] for item in content if item["type"] == "image_url"]
 
-        self.assertEqual(len(image_urls), 3)
-        self.assertIn("Standard answer image provided: yes", content[0]["text"])
-        self.assertIn("Grading rules image provided: yes", content[0]["text"])
+        self.assertEqual(len(image_urls), 1)
+        self.assertIn("teacher has already confirmed", content[0]["text"])
+        self.assertIn("suggested_score, max_score", content[0]["text"])
+        self.assertEqual(body["max_tokens"], 450)
+
+    def test_reference_parse_payload_uses_one_reference_image(self):
+        payload = valid_payload()
+        request = parse_reference_parse_request({"image": payload["image"]}, max_image_bytes=1024)
+        client = OpenAIResponsesClient(settings())
+
+        body = client._build_reference_chat_payload(request)
+        content = body["messages"][0]["content"]
+        image_urls = [item["image_url"] for item in content if item["type"] == "image_url"]
+
+        self.assertEqual(len(image_urls), 1)
+        self.assertEqual(len(body["messages"]), 1)
+        self.assertEqual(body["max_tokens"], 500)
+        self.assertIn("Read this teacher reference image", content[0]["text"])
+        self.assertNotIn("math grading task", content[0]["text"])
+        self.assertIn("standard_answer, grading_rules", build_reference_parse_prompt(request))
+
+    def test_grade_uses_chat_completions_directly_for_image_url_flow(self):
+        request = parse_grade_request(valid_payload(), max_image_bytes=1024)
+        client = OpenAIResponsesClient(settings())
+        chat_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "suggested_score": 6,
+                                "max_score": 6,
+                                "confidence": 0.9,
+                                "needs_review": False,
+                                "review_reason": "",
+                                "deduction_points": [],
+                                "student_answer_summary": "Correct answer.",
+                                "uncertain_factors": [],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch.object(
+            client,
+            "_post_json",
+            return_value=chat_response,
+        ) as post_json:
+            result = client.grade(request)
+
+        self.assertEqual(result["suggested_score"], 6)
+        self.assertEqual(post_json.call_count, 1)
+        self.assertTrue(post_json.call_args.args[0].endswith("/chat/completions"))
+
+    def test_parse_reference_uses_chat_completions_directly_for_image_url_flow(self):
+        request = parse_reference_parse_request({"image": valid_payload()["image"]}, max_image_bytes=1024)
+        client = OpenAIResponsesClient(settings())
+        chat_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "standard_answer": "x = 2",
+                                "grading_rules": "Equation 2 points; final answer 4 points.",
+                                "deduction_rules": "Blank answer gets 0.",
+                                "max_score": 6,
+                                "confidence": 0.9,
+                                "needs_review": False,
+                                "review_reason": "",
+                                "uncertain_factors": [],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch.object(client, "_post_json", return_value=chat_response) as post_json:
+            result = client.parse_reference(request)
+
+        self.assertEqual(result["standard_answer"], "x = 2")
+        self.assertEqual(post_json.call_count, 1)
+        self.assertTrue(post_json.call_args.args[0].endswith("/chat/completions"))
 
     def test_schema_text_is_valid_json_when_embedded(self):
         response = extract_output_text(
@@ -92,6 +180,53 @@ class OpenAIClientHelpersTest(unittest.TestCase):
 
         self.assertEqual(json.loads(response)["suggested_score"], 3)
 
+    def test_imgbb_response_paths_fall_back_to_model_readable_variants(self):
+        paths = _image_upload_response_paths(
+            upload_url="https://api.imgbb.com/1/upload?key=test-key",
+            configured_path="data.medium.url",
+        )
+        payload = {
+            "data": {
+                "thumb": {"url": "https://i.ibb.co/thumb/test.png"},
+                "url": "https://i.ibb.co/original/test.png",
+            }
+        }
+
+        self.assertEqual(
+            paths,
+            ("data.medium.url", "data.thumb.url", "data.display_url", "data.url"),
+        )
+        self.assertEqual(_get_first_path(payload, paths), "https://i.ibb.co/thumb/test.png")
+
+    def test_remote_disconnect_is_reported_as_upstream_error(self):
+        client = OpenAIResponsesClient(settings())
+
+        with patch(
+            "grading_api.openai_client.urllib.request.urlopen",
+            side_effect=http.client.RemoteDisconnected("closed"),
+        ):
+            with self.assertRaises(UpstreamError) as context:
+                client._post_json("https://api.openai.com/v1/chat/completions", {"model": "fake-model"})
+
+        self.assertEqual(context.exception.error_code, "upstream_error")
+        self.assertEqual(context.exception.details["reason"], "RemoteDisconnected")
+
+    def test_remote_disconnect_retries_before_success(self):
+        client = OpenAIResponsesClient(settings())
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=None)
+        response.read.return_value = b'{"ok": true}'
+
+        with patch("grading_api.openai_client.time.sleep"), patch(
+            "grading_api.openai_client.urllib.request.urlopen",
+            side_effect=[http.client.RemoteDisconnected("closed"), response],
+        ) as urlopen:
+            result = client._post_json("https://api.openai.com/v1/chat/completions", {"model": "fake-model"})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(urlopen.call_count, 2)
+
     def test_http_error_detail_does_not_expose_provider_message(self):
         body = json.dumps(
             {
@@ -103,7 +238,7 @@ class OpenAIClientHelpersTest(unittest.TestCase):
             }
         ).encode("utf-8")
         error = urllib.error.HTTPError(
-            url="https://api.openai.com/v1/responses",
+            url="https://api.openai.com/v1/chat/completions",
             code=401,
             msg="Unauthorized",
             hdrs={},
@@ -118,7 +253,7 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         self.assertNotIn("secret-token", json.dumps(detail))
         self.assertEqual(
             _safe_upstream_message(detail),
-            "OpenAI API credentials are invalid or not authorized.",
+            "Model API credentials are invalid or not authorized.",
         )
 
 

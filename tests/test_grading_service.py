@@ -143,13 +143,13 @@ class ValidateModelResultTest(unittest.TestCase):
         self.assertTrue(result.needs_review)
         self.assertIn("between 0 and max_score", result.review_reason)
 
-    def test_low_confidence_forces_review(self):
+    def test_confidence_below_90_does_not_force_review(self):
         request = parse_grade_request(valid_payload(), max_image_bytes=1024)
         result = validate_model_result(
             {
                 "suggested_score": 4,
                 "max_score": 6,
-                "confidence": 0.65,
+                "confidence": 0.85,
                 "needs_review": False,
                 "review_reason": "",
                 "deduction_points": [],
@@ -159,8 +159,27 @@ class ValidateModelResultTest(unittest.TestCase):
             request,
         )
 
-        self.assertTrue(result.needs_review)
-        self.assertIn("below 0.70", result.review_reason)
+        self.assertFalse(result.needs_review)
+        self.assertEqual(result.confidence, 0.85)
+
+    def test_percent_confidence_is_normalized(self):
+        request = parse_grade_request(valid_payload(), max_image_bytes=1024)
+        result = validate_model_result(
+            {
+                "suggested_score": 4,
+                "max_score": 6,
+                "confidence": 85,
+                "needs_review": False,
+                "review_reason": "",
+                "deduction_points": [],
+                "student_answer_summary": "",
+                "uncertain_factors": [],
+            },
+            request,
+        )
+
+        self.assertFalse(result.needs_review)
+        self.assertEqual(result.confidence, 0.85)
 
 
 class GradingServiceTest(unittest.TestCase):

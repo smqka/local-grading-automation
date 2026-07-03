@@ -6,7 +6,11 @@ import base64
 import binascii
 import http.client
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -60,7 +64,29 @@ class OpenAIResponsesClient:
         return _parse_json_object_from_model(response_payload)
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body_text = json.dumps(payload, ensure_ascii=False)
+
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                curl_path = _find_curl_executable()
+                if curl_path:
+                    response_body = self._post_json_with_curl(url, body_text, curl_path)
+                else:
+                    response_body = self._post_json_with_urllib(url, body_text.encode("utf-8"))
+                break
+            except UpstreamError:
+                if attempt < attempts - 1:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise
+
+        try:
+            return json.loads(_extract_sse_json_text(response_body))
+        except json.JSONDecodeError as exc:
+            raise UpstreamError("OpenAI returned invalid JSON.") from exc
+
+    def _post_json_with_urllib(self, url: str, body: bytes) -> str:
         http_request = urllib.request.Request(
             url,
             data=body,
@@ -71,43 +97,104 @@ class OpenAIResponsesClient:
             method="POST",
         )
 
-        attempts = 3
-        for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(
+                http_request,
+                timeout=self._settings.request_timeout_seconds,
+            ) as response:
+                return response.read().decode("utf-8")
+        except urllib.error.URLError as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                raise
+            raise UpstreamError(
+                "Could not reach the model API. Check network, proxy, or OPENAI_BASE_URL.",
+                details={"reason": str(exc.reason)},
+            ) from exc
+        except TimeoutError as exc:
+            raise UpstreamError("Model API request timed out. Check network or proxy.") from exc
+        except (http.client.HTTPException, OSError) as exc:
+            raise UpstreamError(
+                "Model API connection failed before a response was returned.",
+                details={"reason": type(exc).__name__},
+            ) from exc
+
+    def _post_json_with_curl(self, url: str, body_text: str, curl_path: str) -> str:
+        request_path = ""
+        response_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix="grading-model-request-",
+                suffix=".json",
+                delete=False,
+            ) as request_file:
+                request_file.write(body_text)
+                request_path = request_file.name
+            with tempfile.NamedTemporaryFile(
+                prefix="grading-model-response-",
+                suffix=".json",
+                delete=False,
+            ) as response_file:
+                response_path = response_file.name
+
+            command = [
+                curl_path,
+                "--silent",
+                "--show-error",
+                "--request",
+                "POST",
+                url,
+                "--header",
+                f"Authorization: Bearer {self._settings.openai_api_key}",
+                "--header",
+                "Content-Type: application/json",
+                "--data-binary",
+                f"@{request_path}",
+                "--output",
+                response_path,
+                "--write-out",
+                "%{http_code}",
+            ]
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=self._settings.request_timeout_seconds,
+                check=False,
+            )
             try:
-                with urllib.request.urlopen(
-                    http_request,
-                    timeout=self._settings.request_timeout_seconds,
-                ) as response:
-                    response_body = response.read().decode("utf-8")
-                break
-            except urllib.error.URLError as exc:
-                if isinstance(exc, urllib.error.HTTPError):
-                    raise
-                if attempt < attempts - 1:
-                    time.sleep(0.8 * (attempt + 1))
-                    continue
+                with open(response_path, encoding="utf-8", errors="replace") as response_file:
+                    response_body = response_file.read()
+            except OSError:
+                response_body = ""
+
+            status_text = completed.stdout.strip()
+            status = int(status_text) if status_text.isdigit() else 0
+            if completed.returncode != 0:
                 raise UpstreamError(
                     "Could not reach the model API. Check network, proxy, or OPENAI_BASE_URL.",
-                    details={"reason": str(exc.reason)},
-                ) from exc
-            except TimeoutError as exc:
-                if attempt < attempts - 1:
-                    time.sleep(0.8 * (attempt + 1))
+                    details={"transport": "curl", "reason": f"curl_exit_{completed.returncode}"},
+                )
+            if status < 200 or status >= 300:
+                detail = _safe_model_error_detail(status, response_body)
+                raise UpstreamError(_safe_upstream_message(detail), details=detail)
+            return response_body
+        except subprocess.TimeoutExpired as exc:
+            raise UpstreamError("Model API request timed out. Check network or proxy.", details={"transport": "curl"}) from exc
+        except OSError as exc:
+            raise UpstreamError(
+                "Model API connection failed before a response was returned.",
+                details={"transport": "curl", "reason": type(exc).__name__},
+            ) from exc
+        finally:
+            for path in (request_path, response_path):
+                if not path:
                     continue
-                raise UpstreamError("Model API request timed out. Check network or proxy.") from exc
-            except (http.client.HTTPException, OSError) as exc:
-                if attempt < attempts - 1:
-                    time.sleep(0.8 * (attempt + 1))
-                    continue
-                raise UpstreamError(
-                    "Model API connection failed before a response was returned.",
-                    details={"reason": type(exc).__name__},
-                ) from exc
-
-        try:
-            return json.loads(response_body)
-        except json.JSONDecodeError as exc:
-            raise UpstreamError("OpenAI returned invalid JSON.") from exc
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def _grade_with_chat_completions(
         self,
@@ -150,7 +237,8 @@ class OpenAIResponsesClient:
                     build_user_prompt(request)
                     + "\n\nReturn only a valid JSON object with these keys: "
                     "suggested_score, max_score, confidence, needs_review, review_reason, "
-                    "deduction_points, student_answer_summary, uncertain_factors."
+                    "deduction_points, student_answer_summary, uncertain_factors. "
+                    "Return confidence as a number from 0 to 1, not as a percent."
                 ),
             },
             self._chat_image_item(request.image.data_uri),
@@ -199,9 +287,57 @@ class OpenAIResponsesClient:
     def _upload_image_for_url(self, data_uri: str) -> str:
         mime_type, image_bytes = _decode_data_uri(data_uri)
         extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[mime_type]
-        boundary = f"----grading-upload-{uuid.uuid4().hex}"
-        field_name = self._settings.image_upload_field
         filename = f"answer-{uuid.uuid4().hex}.{extension}"
+
+        upload_errors: list[UpstreamError] = []
+        for attempt in range(3):
+            try:
+                curl_path = _find_curl_executable()
+                if curl_path:
+                    response_body = self._upload_image_with_curl(
+                        curl_path=curl_path,
+                        image_bytes=image_bytes,
+                        field_name=self._settings.image_upload_field,
+                        filename=filename,
+                        mime_type=mime_type,
+                        extension=extension,
+                    )
+                else:
+                    response_body = self._upload_image_with_urllib(
+                        image_bytes=image_bytes,
+                        field_name=self._settings.image_upload_field,
+                        filename=filename,
+                        mime_type=mime_type,
+                    )
+                break
+            except UpstreamError as exc:
+                upload_errors.append(exc)
+                if attempt < 2:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise exc
+        else:
+            raise upload_errors[-1]
+
+        url = self._extract_upload_url(response_body)
+
+        if self._settings.image_upload_rewrite_from:
+            url = url.replace(
+                self._settings.image_upload_rewrite_from,
+                self._settings.image_upload_rewrite_to,
+                1,
+            )
+        return url
+
+    def _upload_image_with_urllib(
+        self,
+        *,
+        image_bytes: bytes,
+        field_name: str,
+        filename: str,
+        mime_type: str,
+    ) -> str:
+        boundary = f"----grading-upload-{uuid.uuid4().hex}"
         body = _build_multipart_body(
             boundary=boundary,
             fields=self._settings.image_upload_extra_fields,
@@ -235,7 +371,94 @@ class OpenAIResponsesClient:
                 "Image URL service connection failed.",
                 details={"reason": type(exc).__name__},
             ) from exc
+        return response_body
 
+    def _upload_image_with_curl(
+        self,
+        *,
+        curl_path: str,
+        image_bytes: bytes,
+        field_name: str,
+        filename: str,
+        mime_type: str,
+        extension: str,
+    ) -> str:
+        image_path = ""
+        response_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="grading-upload-",
+                suffix=f".{extension}",
+                delete=False,
+            ) as image_file:
+                image_file.write(image_bytes)
+                image_path = image_file.name
+            with tempfile.NamedTemporaryFile(
+                prefix="grading-upload-response-",
+                suffix=".txt",
+                delete=False,
+            ) as response_file:
+                response_path = response_file.name
+
+            command = [
+                curl_path,
+                "--silent",
+                "--show-error",
+                "--request",
+                "POST",
+                self._settings.image_upload_url or "",
+                "--output",
+                response_path,
+                "--write-out",
+                "%{http_code}",
+            ]
+            for name, value in self._settings.image_upload_extra_fields:
+                command.extend(["--form", f"{name}={value}"])
+            command.extend(["--form", f"{field_name}=@{image_path};filename={filename};type={mime_type}"])
+
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=self._settings.request_timeout_seconds,
+                check=False,
+            )
+            try:
+                with open(response_path, encoding="utf-8", errors="replace") as response_file:
+                    response_body = response_file.read()
+            except OSError:
+                response_body = ""
+
+            status_text = completed.stdout.strip()
+            status = int(status_text) if status_text.isdigit() else 0
+            if completed.returncode != 0:
+                raise UpstreamError(
+                    "Image URL service is unavailable.",
+                    details={"transport": "curl", "reason": f"curl_exit_{completed.returncode}"},
+                )
+            if status < 200 or status >= 300:
+                raise UpstreamError(
+                    "Image URL upload failed.",
+                    details=_safe_upload_error_detail(status, response_body),
+                )
+            return response_body
+        except subprocess.TimeoutExpired as exc:
+            raise UpstreamError("Image URL upload timed out.", details={"transport": "curl"}) from exc
+        except OSError as exc:
+            raise UpstreamError(
+                "Image URL service connection failed.",
+                details={"transport": "curl", "reason": type(exc).__name__},
+            ) from exc
+        finally:
+            for path in (image_path, response_path):
+                if not path:
+                    continue
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    def _extract_upload_url(self, response_body: str) -> str:
         if self._settings.image_upload_response_format == "text":
             url = response_body.strip()
         else:
@@ -251,13 +474,6 @@ class OpenAIResponsesClient:
 
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             raise UpstreamError("Image URL service did not return a usable image URL.")
-
-        if self._settings.image_upload_rewrite_from:
-            url = url.replace(
-                self._settings.image_upload_rewrite_from,
-                self._settings.image_upload_rewrite_to,
-                1,
-            )
         return url
 
 
@@ -443,6 +659,60 @@ def _image_upload_response_paths(*, upload_url: str | None, configured_path: str
     if upload_url and "api.imgbb.com/1/upload" in upload_url:
         paths.extend(["data.medium.url", "data.thumb.url", "data.display_url", "data.url"])
     return tuple(dict.fromkeys(path for path in paths if path))
+
+
+def _find_curl_executable() -> str | None:
+    return shutil.which("curl.exe") or shutil.which("curl")
+
+
+def _safe_upload_error_detail(status: int, response_body: str) -> dict[str, Any]:
+    detail: dict[str, Any] = {"status": status, "transport": "curl"}
+    try:
+        parsed = json.loads(response_body)
+    except Exception:
+        return detail
+    if not isinstance(parsed, dict):
+        return detail
+    error = parsed.get("error")
+    if isinstance(error, dict):
+        for key in ("type", "code"):
+            if isinstance(error.get(key), str):
+                detail[key] = error[key]
+    if isinstance(parsed.get("status_code"), int):
+        detail["provider_status"] = parsed["status_code"]
+    return detail
+
+
+def _safe_model_error_detail(status: int, response_body: str) -> dict[str, Any]:
+    detail: dict[str, Any] = {"status": status, "transport": "curl"}
+    try:
+        parsed = json.loads(_extract_sse_json_text(response_body))
+    except Exception:
+        return detail
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if isinstance(error, dict):
+        for key in ("type", "code"):
+            if isinstance(error.get(key), str):
+                detail[key] = error[key]
+    return detail
+
+
+def _extract_sse_json_text(response_body: str) -> str:
+    text = response_body.strip()
+    if text.startswith("{"):
+        return text
+
+    chunks: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if data and data != "[DONE]":
+            chunks.append(data)
+    if len(chunks) == 1:
+        return chunks[0]
+    return text
 
 
 def _safe_error_detail(exc: urllib.error.HTTPError) -> dict[str, Any]:

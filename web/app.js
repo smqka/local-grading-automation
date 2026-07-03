@@ -635,7 +635,7 @@ async function clickNextPageOnly() {
 }
 
 function decideAutoAction(result) {
-  const confidence = Number(result.confidence || 0);
+  const confidence = normalizeConfidenceRatio(result.confidence);
   const suggestedScore = Number(result.suggested_score);
   const threshold = getConfidenceThreshold();
   const canAutoScore = confidence >= threshold && !result.needs_review && Number.isFinite(suggestedScore);
@@ -765,14 +765,14 @@ async function runAutoLoop(runId, initialDelayMs = 0) {
         return;
       }
       addHistoryItem(result, { skipped: true });
-      setResultStatus(`置信度低于 ${formatPercent(getConfidenceThreshold())}，已自动跳过。`, "warning");
+      setResultStatus(autoHoldMessage(result, "已自动跳过。"), "warning");
       setClickStatus("已跳过，等待页面切换", "ready");
       delayBeforeCapture = getPageRefreshDelayMs();
       continue;
     }
 
     addHistoryItem(result, { needsManual: true });
-    setResultStatus(`置信度低于 ${formatPercent(getConfidenceThreshold())}，等待人工审核。`, "warning");
+    setResultStatus(autoHoldMessage(result, "等待人工审核。"), "warning");
     pauseAutoFlow("等待人工审核，处理后点继续");
     return;
   }
@@ -955,7 +955,7 @@ function renderResult(result, options = {}) {
     result.suggested_score === null || result.suggested_score === undefined
       ? `待复核 / ${formatScore(result.max_score)}`
       : `${formatScore(result.suggested_score)} / ${formatScore(result.max_score)}`;
-  elements.confidence.textContent = `${Math.round((result.confidence || 0) * 100)}%`;
+  elements.confidence.textContent = formatPercent(normalizeConfidenceRatio(result.confidence));
   elements.modelName.textContent = result.model || "--";
   renderList(elements.uncertainList, result.uncertain_factors, "无明显不确定因素");
 
@@ -1042,9 +1042,9 @@ function renderHistory() {
         : item.needs_manual || item.needs_review
           ? "等待审核"
           : "可参考";
-    meta.textContent = `${Number.isNaN(time.getTime()) ? "" : time.toLocaleTimeString()} · 置信度 ${Math.round(
-      (item.confidence || 0) * 100
-    )}% · ${state}`;
+    meta.textContent = `${
+      Number.isNaN(time.getTime()) ? "" : time.toLocaleTimeString()
+    } · 置信度 ${formatPercent(normalizeConfidenceRatio(item.confidence))} · ${state}`;
 
     row.append(main, meta);
     elements.historyList.append(row);
@@ -1079,7 +1079,7 @@ function clearCroppedImage() {
 }
 
 function isAutoAccepted(result) {
-  const confidence = Number(result.confidence || 0);
+  const confidence = normalizeConfidenceRatio(result.confidence);
   const suggestedScore = Number(result.suggested_score);
   return confidence >= getConfidenceThreshold() && !result.needs_review && Number.isFinite(suggestedScore);
 }
@@ -1127,6 +1127,28 @@ function formatScore(value) {
 
 function formatPercent(value) {
   return `${Math.round(Number(value || 0) * 100)}%`;
+}
+
+function normalizeConfidenceRatio(value) {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence)) {
+    return 0;
+  }
+  if (confidence > 1 && confidence <= 100) {
+    return confidence / 100;
+  }
+  return clamp(confidence, 0, 1);
+}
+
+function autoHoldMessage(result, suffix) {
+  const confidence = normalizeConfidenceRatio(result.confidence);
+  if (confidence < getConfidenceThreshold()) {
+    return `置信度低于 ${formatPercent(getConfidenceThreshold())}，${suffix}`;
+  }
+  if (result.needs_review) {
+    return `模型标记需要复核，${suffix}`;
+  }
+  return `未满足自动打分条件，${suffix}`;
 }
 
 function formatDelaySeconds(ms) {

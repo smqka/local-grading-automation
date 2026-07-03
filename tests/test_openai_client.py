@@ -38,6 +38,24 @@ def settings() -> Settings:
     )
 
 
+def upload_settings() -> Settings:
+    return Settings(
+        host="127.0.0.1",
+        port=0,
+        openai_api_key="test-key",
+        openai_base_url="https://api.openai.com/v1",
+        openai_model="fake-model",
+        prompt_version="test-prompt",
+        request_timeout_seconds=1,
+        max_image_bytes=1024,
+        api_token=None,
+        allowed_origins=("http://localhost:5173",),
+        image_upload_url="https://api.imgbb.com/1/upload?key=test-key",
+        image_upload_field="image",
+        image_upload_response_path="data.url",
+    )
+
+
 class OpenAIClientHelpersTest(unittest.TestCase):
     def test_extract_output_text_from_response_output(self):
         payload = {
@@ -180,6 +198,55 @@ class OpenAIClientHelpersTest(unittest.TestCase):
 
         self.assertEqual(json.loads(response)["suggested_score"], 3)
 
+    def test_model_post_uses_curl_when_available(self):
+        client = OpenAIResponsesClient(settings())
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value="curl.exe"), patch.object(
+            client, "_post_json_with_curl", return_value='{"ok": true}'
+        ) as curl_post, patch.object(client, "_post_json_with_urllib") as urllib_post:
+            result = client._post_json("https://api.openai.com/v1/chat/completions", {"model": "fake-model"})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(curl_post.call_count, 1)
+        urllib_post.assert_not_called()
+
+    def test_model_post_retries_curl_before_success(self):
+        client = OpenAIResponsesClient(settings())
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value="curl.exe"), patch(
+            "grading_api.openai_client.time.sleep"
+        ) as sleep, patch.object(
+            client,
+            "_post_json_with_curl",
+            side_effect=[UpstreamError("Could not reach the model API."), '{"ok": true}'],
+        ) as curl_post:
+            result = client._post_json("https://api.openai.com/v1/chat/completions", {"model": "fake-model"})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(curl_post.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_model_post_falls_back_to_urllib_when_curl_is_missing(self):
+        client = OpenAIResponsesClient(settings())
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value=None), patch.object(
+            client, "_post_json_with_urllib", return_value='{"ok": true}'
+        ) as urllib_post:
+            result = client._post_json("https://api.openai.com/v1/chat/completions", {"model": "fake-model"})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(urllib_post.call_count, 1)
+
+    def test_model_post_accepts_single_sse_json_chunk(self):
+        client = OpenAIResponsesClient(settings())
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value="curl.exe"), patch.object(
+            client, "_post_json_with_curl", return_value='data: {"ok": true}\n\ndata: [DONE]\n'
+        ):
+            result = client._post_json("https://api.openai.com/v1/chat/completions", {"model": "fake-model"})
+
+        self.assertEqual(result, {"ok": True})
+
     def test_imgbb_response_paths_fall_back_to_model_readable_variants(self):
         paths = _image_upload_response_paths(
             upload_url="https://api.imgbb.com/1/upload?key=test-key",
@@ -198,10 +265,54 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         )
         self.assertEqual(_get_first_path(payload, paths), "https://i.ibb.co/thumb/test.png")
 
+    def test_image_upload_uses_curl_when_available(self):
+        client = OpenAIResponsesClient(upload_settings())
+        response_body = json.dumps({"data": {"url": "https://i.ibb.co/original/test.png"}})
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value="curl.exe"), patch.object(
+            client, "_upload_image_with_curl", return_value=response_body
+        ) as curl_upload, patch.object(client, "_upload_image_with_urllib") as urllib_upload:
+            url = client._upload_image_for_url(valid_payload()["image"])
+
+        self.assertEqual(url, "https://i.ibb.co/original/test.png")
+        self.assertEqual(curl_upload.call_count, 1)
+        urllib_upload.assert_not_called()
+
+    def test_image_upload_retries_curl_before_success(self):
+        client = OpenAIResponsesClient(upload_settings())
+        response_body = json.dumps({"data": {"url": "https://i.ibb.co/original/test.png"}})
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value="curl.exe"), patch(
+            "grading_api.openai_client.time.sleep"
+        ) as sleep, patch.object(
+            client,
+            "_upload_image_with_curl",
+            side_effect=[UpstreamError("Image URL service is unavailable."), response_body],
+        ) as curl_upload:
+            url = client._upload_image_for_url(valid_payload()["image"])
+
+        self.assertEqual(url, "https://i.ibb.co/original/test.png")
+        self.assertEqual(curl_upload.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_image_upload_falls_back_to_urllib_when_curl_is_missing(self):
+        client = OpenAIResponsesClient(upload_settings())
+        response_body = json.dumps({"data": {"url": "https://i.ibb.co/original/test.png"}})
+
+        with patch("grading_api.openai_client._find_curl_executable", return_value=None), patch.object(
+            client, "_upload_image_with_urllib", return_value=response_body
+        ) as urllib_upload:
+            url = client._upload_image_for_url(valid_payload()["image"])
+
+        self.assertEqual(url, "https://i.ibb.co/original/test.png")
+        self.assertEqual(urllib_upload.call_count, 1)
+
     def test_remote_disconnect_is_reported_as_upstream_error(self):
         client = OpenAIResponsesClient(settings())
 
-        with patch(
+        with patch("grading_api.openai_client._find_curl_executable", return_value=None), patch(
+            "grading_api.openai_client.time.sleep"
+        ), patch(
             "grading_api.openai_client.urllib.request.urlopen",
             side_effect=http.client.RemoteDisconnected("closed"),
         ):
@@ -218,7 +329,9 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         response.__exit__ = Mock(return_value=None)
         response.read.return_value = b'{"ok": true}'
 
-        with patch("grading_api.openai_client.time.sleep"), patch(
+        with patch("grading_api.openai_client._find_curl_executable", return_value=None), patch(
+            "grading_api.openai_client.time.sleep"
+        ), patch(
             "grading_api.openai_client.urllib.request.urlopen",
             side_effect=[http.client.RemoteDisconnected("closed"), response],
         ) as urlopen:

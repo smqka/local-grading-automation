@@ -76,11 +76,7 @@ def validate_reference_parse_result(raw: dict[str, Any]) -> ReferenceParseResult
             raw={},
         )
 
-    confidence = raw.get("confidence")
-    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(float(confidence)):
-        confidence_value = 0.0
-    else:
-        confidence_value = max(0.0, min(float(confidence), 1.0))
+    confidence_value = _normalize_confidence_value(raw.get("confidence"))
 
     max_score = raw.get("max_score")
     max_score_value = None
@@ -134,10 +130,7 @@ def validate_model_result(raw: dict[str, Any], request: GradeRequest) -> ModelGr
         if not _matches_precision(suggested_score, request.score_precision):
             errors.append(f"suggested_score must match {request.score_precision} precision")
 
-    if confidence is None:
-        confidence = 0.0
-    elif confidence < 0 or confidence > 1:
-        errors.append("confidence must be between 0 and 1")
+    confidence = _normalize_model_confidence(confidence, errors)
 
     if max_score is None:
         max_score = request.max_score
@@ -149,11 +142,6 @@ def validate_model_result(raw: dict[str, Any], request: GradeRequest) -> ModelGr
     summary = _text_or_empty(raw.get("student_answer_summary"))
     review_reason = _text_or_empty(raw.get("review_reason"))
     needs_review = bool(raw.get("needs_review", False))
-
-    if confidence < 0.9:
-        needs_review = True
-        if not review_reason:
-            review_reason = _confidence_review_reason(confidence)
 
     if errors:
         needs_review = True
@@ -248,6 +236,28 @@ def _maybe_number(value: Any, name: str, errors: list[str]) -> float | None:
     return float(value)
 
 
+def _normalize_model_confidence(value: float | None, errors: list[str]) -> float:
+    if value is None:
+        return 0.0
+    if 0 <= value <= 1:
+        return value
+    if 1 < value <= 100:
+        return value / 100
+    errors.append("confidence must be between 0 and 1, or between 0 and 100 as a percent")
+    return 0.0
+
+
+def _normalize_confidence_value(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return 0.0
+    confidence = float(value)
+    if 0 <= confidence <= 1:
+        return confidence
+    if 1 < confidence <= 100:
+        return confidence / 100
+    return 0.0
+
+
 def _required_text(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BadRequestError(f"{name} is required.")
@@ -314,12 +324,6 @@ def _text_or_empty(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
-
-
-def _confidence_review_reason(confidence: float) -> str:
-    if confidence < 0.7:
-        return "Confidence is below 0.70; teacher review is required."
-    return "Confidence is below 0.90; teacher review is recommended."
 
 
 def _review_result(request: GradeRequest, reason: str, raw: dict[str, Any]) -> ModelGradeResult:

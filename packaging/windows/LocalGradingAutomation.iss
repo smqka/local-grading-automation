@@ -1,5 +1,5 @@
 #define AppName "AI阅卷助手"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppExe "bin\launcher\launcher.exe"
 
 [Setup]
@@ -8,12 +8,12 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Local Grading Automation Contributors
-AppPublisherURL=https://github.com/Liuhe808/local-grading-automation
+AppPublisherURL=https://github.com/smqka/local-grading-automation
 DefaultDirName={localappdata}\Programs\LocalGradingAutomation
 DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=..\..\dist\installer
-OutputBaseFilename=AI阅卷助手_Setup_1.0.0_x64
+OutputBaseFilename=AI阅卷助手_Setup_1.1.0_x64
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest

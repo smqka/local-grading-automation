@@ -10,6 +10,8 @@ from __future__ import annotations
 import base64
 import ctypes
 import json
+import queue
+import threading
 import os
 import secrets
 import socket
@@ -26,7 +28,12 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from urllib.parse import urlsplit
 
-APP_TITLE = "AI 阅卷助手"
+from proxy_network import (
+    configure_child_environment, probe_connectivity,
+    select_proxy, validate_network_settings,
+)
+
+APP_TITLE = "AI 阅卷助手 V1.1"
 APP_DIR_NAME = "LocalGradingAutomation"
 WEB_PORT = 5175
 API_PORT = 8765
@@ -150,15 +157,24 @@ def load_config() -> dict[str, str] | None:
         raise ValueError("用户配置格式不正确，请重新设置")
     key = _dpapi_decrypt(data["api_key_dpapi"])
     base_url, model, api_key = validate_config(data.get("base_url", ""), data.get("model", ""), key)
-    return {"base_url": base_url, "model": model, "api_key": api_key}
+    network_mode, proxy_url = validate_network_settings(
+        data.get("network_mode", "auto"), data.get("proxy_url", "")
+    )
+    return {"base_url": base_url, "model": model, "api_key": api_key,
+            "network_mode": network_mode, "proxy_url": proxy_url}
 
 
 def save_config(config: dict[str, str]) -> None:
     base_url, model, api_key = validate_config(config["base_url"], config["model"], config["api_key"])
+    network_mode, proxy_url = validate_network_settings(
+        config.get("network_mode", "auto"), config.get("proxy_url", "")
+    )
     directory = user_data_dir()
     directory.mkdir(parents=True, exist_ok=True)
     content = {
-        "version": 1,
+        "version": 2,
+        "network_mode": network_mode,
+        "proxy_url": proxy_url,
         "base_url": base_url,
         "model": model,
         "api_key_dpapi": _dpapi_encrypt(api_key),
@@ -185,34 +201,49 @@ def get_json(url: str) -> dict:
 class ConfigDialog(tk.Toplevel):
     def __init__(self, parent: tk.Tk, config: dict[str, str] | None) -> None:
         super().__init__(parent)
-        self.title("首次配置 / 修改模型设置")
+        self.title("模型与网络配置（V1.1）")
         self.resizable(False, False)
         self.transient(parent)
         self.result: dict[str, str] | None = None
+        self._test_queue: queue.Queue[tuple[bool, str]] = queue.Queue()
         self.grab_set()
         frame = ttk.Frame(self, padding=18)
         frame.grid(sticky="nsew")
         self.base_var = tk.StringVar(value=(config or {}).get("base_url", DEFAULT_BASE_URL))
         self.model_var = tk.StringVar(value=(config or {}).get("model", DEFAULT_MODEL))
         self.key_var = tk.StringVar(value=(config or {}).get("api_key", ""))
+        self.network_mode = tk.StringVar(value=(config or {}).get("network_mode", "auto"))
+        self.proxy_var = tk.StringVar(value=(config or {}).get("proxy_url", ""))
         for row, (label, var) in enumerate([
             ("模型接口地址（Base URL）", self.base_var),
             ("支持图片输入的模型名", self.model_var),
             ("API Key", self.key_var),
         ]):
             ttk.Label(frame, text=label).grid(row=row * 2, column=0, sticky="w", pady=(0, 3))
-            entry = ttk.Entry(frame, width=54, textvariable=var, show="*" if row == 2 else "")
-            entry.grid(row=row * 2 + 1, column=0, sticky="ew", pady=(0, 12))
+            entry = ttk.Entry(frame, width=62, textvariable=var, show="*" if row == 2 else "")
+            entry.grid(row=row * 2 + 1, column=0, sticky="ew", pady=(0, 9))
             if row == 2:
                 entry.focus_set()
-        ttk.Label(
-            frame,
-            text="Key 使用 Windows 当前用户 DPAPI 加密保存在本机；不会写入安装目录。",
-            foreground="#666666",
-            wraplength=410,
-        ).grid(row=6, column=0, sticky="w", pady=(0, 14))
+        ttk.Separator(frame).grid(row=6, column=0, sticky="ew", pady=(3, 8))
+        ttk.Label(frame, text="API 网络连接方式", font=("Microsoft YaHei UI", 10, "bold")).grid(row=7, column=0, sticky="w")
+        option_row = ttk.Frame(frame)
+        option_row.grid(row=8, column=0, sticky="w", pady=(4, 4))
+        for label, value in (("自动读取系统代理", "auto"), ("直连", "direct"), ("手动代理", "manual")):
+            ttk.Radiobutton(option_row, text=label, value=value, variable=self.network_mode,
+                            command=self._update_proxy_field).pack(side="left", padx=(0, 13))
+        ttk.Label(frame, text="代理地址（仅手动模式使用，例如 http://127.0.0.1:7897）").grid(row=9, column=0, sticky="w")
+        self.proxy_entry = ttk.Entry(frame, textvariable=self.proxy_var, width=62)
+        self.proxy_entry.grid(row=10, column=0, sticky="ew", pady=(4, 8))
+        self._update_proxy_field()
+        ttk.Label(frame, text="API Key 由 Windows 当前用户 DPAPI 加密保存；代理配置仅应用到本软件。",
+                  foreground="#666666", wraplength=500).grid(row=11, column=0, sticky="w", pady=(0, 7))
+        self.test_status = tk.StringVar(value="可先测试网络连通性（免费，不检查密钥和图片模型）。")
+        ttk.Label(frame, textvariable=self.test_status, wraplength=500, foreground="#555555").grid(
+            row=12, column=0, sticky="w", pady=(0, 7))
         controls = ttk.Frame(frame)
-        controls.grid(row=7, column=0, sticky="e")
+        controls.grid(row=13, column=0, sticky="e")
+        self.test_button = ttk.Button(controls, text="测试网络连接", command=self._test_connection)
+        self.test_button.pack(side="left", padx=(0, 10))
         ttk.Button(controls, text="取消", command=self.destroy).pack(side="right", padx=(8, 0))
         ttk.Button(controls, text="保存配置", command=self._save).pack(side="right")
         self.bind("<Escape>", lambda _e: self.destroy())
@@ -220,10 +251,49 @@ class ConfigDialog(tk.Toplevel):
         self.wait_visibility()
         self.focus_force()
 
+    def _update_proxy_field(self) -> None:
+        self.proxy_entry.configure(state="normal" if self.network_mode.get() == "manual" else "disabled")
+
+    def _test_connection(self) -> None:
+        try:
+            target = self.base_var.get().strip().rstrip("/")
+            parts = urlsplit(target)
+            if parts.scheme not in ("http", "https") or not parts.hostname:
+                raise ValueError("请先填写有效的 API Base URL")
+            mode, address = validate_network_settings(self.network_mode.get(), self.proxy_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("配置错误", str(exc), parent=self)
+            return
+        self.test_button.configure(state="disabled")
+        self.test_status.set("正在检查系统代理并测试连接…（最多约 20 秒）")
+
+        def worker() -> None:
+            try:
+                selection = select_proxy(target, mode, address)
+                result = probe_connectivity(target, selection)
+            except Exception as exc:
+                result = (False, f"无法执行测试：{type(exc).__name__}")
+            self._test_queue.put(result)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(160, self._poll_test)
+
+    def _poll_test(self) -> None:
+        try:
+            ok, detail = self._test_queue.get_nowait()
+        except queue.Empty:
+            if self.winfo_exists():
+                self.after(160, self._poll_test)
+            return
+        self.test_button.configure(state="normal")
+        self.test_status.set(("连接成功：" if ok else "连接失败：") + detail)
+
     def _save(self) -> None:
         try:
             base, model, key = validate_config(self.base_var.get(), self.model_var.get(), self.key_var.get())
-            self.result = {"base_url": base, "model": model, "api_key": key}
+            network_mode, proxy_url = validate_network_settings(self.network_mode.get(), self.proxy_var.get())
+            self.result = {"base_url": base, "model": model, "api_key": key,
+                           "network_mode": network_mode, "proxy_url": proxy_url}
             save_config(self.result)
             self.destroy()
         except Exception as exc:
@@ -234,14 +304,15 @@ class GradingLauncher:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("490x250")
-        self.root.minsize(490, 250)
+        self.root.geometry("560x265")
+        self.root.minsize(560, 265)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.processes: list[subprocess.Popen] = []
         self.start_time: float | None = None
         self.config: dict[str, str] | None = None
         self.logs: list = []
         self.status = tk.StringVar(value="尚未启动")
+        self.network_summary = ""
         container = ttk.Frame(root, padding=22)
         container.pack(fill="both", expand=True)
         ttk.Label(container, text="AI 阅卷助手", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor="w", pady=(0, 10))
@@ -251,7 +322,7 @@ class GradingLauncher:
         buttons.pack(anchor="w")
         self.start_button = ttk.Button(buttons, text="启动并打开工作台", command=self.start)
         self.start_button.pack(side="left")
-        ttk.Button(buttons, text="模型配置", command=self.edit_config).pack(side="left", padx=(10, 0))
+        ttk.Button(buttons, text="模型与网络配置", command=self.edit_config).pack(side="left", padx=(10, 0))
         ttk.Button(buttons, text="查看日志", command=self.open_logs).pack(side="left", padx=(10, 0))
         ttk.Button(buttons, text="退出", command=self.quit).pack(side="left", padx=(10, 0))
         ttk.Label(container, text="关闭此窗口时，本次启动的网页服务和评分服务会一起退出。", foreground="#777777").pack(anchor="w", pady=(18, 0))
@@ -307,7 +378,14 @@ class GradingLauncher:
         if missing:
             messagebox.showerror("文件不完整", "安装目录缺少以下文件：\n" + "\n".join(missing), parent=self.root)
             return
-        env = dict(os.environ)
+        try:
+            selection = select_proxy(self.config["base_url"],
+                                     self.config.get("network_mode", "auto"),
+                                     self.config.get("proxy_url", ""))
+        except ValueError as exc:
+            messagebox.showerror("网络配置错误", str(exc), parent=self.root)
+            return
+        env = configure_child_environment(os.environ, selection)
         env.update({
             "OPENAI_API_KEY": self.config["api_key"],
             "OPENAI_BASE_URL": self.config["base_url"],
@@ -335,7 +413,9 @@ class GradingLauncher:
             self.stop()
             messagebox.showerror("启动失败", str(exc), parent=self.root)
             return
-        self.status.set("正在启动本地评分服务和网页服务…")
+        self.network_summary = (selection.source +
+                                (f"：{selection.proxy_url}" if selection.proxy_url else "：直连"))
+        self.status.set(f"网络：{self.network_summary}；正在启动服务…")
         self.start_button.configure(state="disabled")
         self.start_time = time.monotonic()
         self.root.after(450, self._check_ready)
@@ -353,7 +433,7 @@ class GradingLauncher:
                     and frontend.get("service") == "exam-grading-assistant"
                     and frontend.get("gradingApiBaseUrl") == API_URL
                     and frontend.get("gradingApi", {}).get("ok")):
-                self.status.set("服务已启动。阅卷工作台地址：" + WEB_URL)
+                self.status.set("服务已启动。网络：" + self.network_summary + "。工作台：" + WEB_URL)
                 self.start_button.configure(state="normal", text="打开工作台")
                 webbrowser.open(WEB_URL)
                 return

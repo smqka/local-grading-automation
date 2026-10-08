@@ -1,11 +1,13 @@
 """Portable contract checks for the optional Windows packaging layer."""
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "packaging" / "windows" / "launcher.py"
+sys.path.insert(0, str(LAUNCHER.parent))
 spec = importlib.util.spec_from_file_location("grading_windows_launcher", LAUNCHER)
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)

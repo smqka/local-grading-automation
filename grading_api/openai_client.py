@@ -64,10 +64,20 @@ class OpenAIResponsesClient:
         return _parse_json_object_from_model(response_payload)
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        # 针对 Qwen3.7-Flash 系列关闭深度思考
+        # V1.2: user-selectable Qwen3 thinking mode, passed by the Windows launcher.
+        # Never send this provider-specific option to GPT or other non-Qwen models.
         model_id = str(payload.get("model", "")).strip().lower()
-        
-        if model_id == "qwen3.7-flash" or model_id.startswith("qwen3.7-flash-"):
+        is_qwen3 = model_id.startswith(("qwen3.", "qwen3-"))
+        mode = os.environ.get("GRADING_QWEN_THINKING_MODE", "").strip().lower()
+        if is_qwen3 and mode in ("on", "off"):
+            thinking_enabled = mode == "on"
+            payload = {**payload, "enable_thinking": thinking_enabled}
+            if thinking_enabled:
+                # The reasoning tokens also use output budget on thinking-capable models.
+                payload["max_tokens"] = max(int(payload.get("max_tokens", 0)), 4096)
+        elif (model_id == "qwen3.7-flash"
+              or model_id.startswith("qwen3.7-flash-")):
+            # Safe fallback when running the grading service outside this launcher.
             payload = {**payload, "enable_thinking": False}
 
         body_text = json.dumps(payload, ensure_ascii=False)

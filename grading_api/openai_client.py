@@ -64,8 +64,10 @@ class OpenAIResponsesClient:
         return _parse_json_object_from_model(response_payload)
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-    # 仅对 Qwen3.7-Flash 关闭深度思考
-        if str(payload.get("model", "")).strip().lower() == "qwen3.7-flash":
+        # 针对 Qwen3.7-Flash 系列关闭深度思考
+        model_id = str(payload.get("model", "")).strip().lower()
+        
+        if model_id == "qwen3.7-flash" or model_id.startswith("qwen3.7-flash-"):
             payload = {**payload, "enable_thinking": False}
 
         body_text = json.dumps(payload, ensure_ascii=False)

@@ -33,7 +33,7 @@ from proxy_network import (
     select_proxy, validate_network_settings,
 )
 
-APP_TITLE = "AI 阅卷助手 V1.1"
+APP_TITLE = "AI 阅卷助手 V1.2"
 APP_DIR_NAME = "LocalGradingAutomation"
 WEB_PORT = 5175
 API_PORT = 8765
@@ -148,6 +148,19 @@ def validate_config(base_url: str, model: str, api_key: str) -> tuple[str, str, 
     return url, name, key
 
 
+def validate_thinking_mode(value: str) -> str:
+    mode = str(value).strip().lower()
+    if mode not in ("on", "off"):
+        raise ValueError("深度思考模式必须选择开启或关闭")
+    return mode
+
+
+def is_qwen_thinking_model(model_id: str) -> bool:
+    """Qwen3 family only; other providers must not receive Qwen-specific flags."""
+    name = model_id.strip().lower()
+    return name.startswith("qwen3.") or name.startswith("qwen3-")
+
+
 def load_config() -> dict[str, str] | None:
     path = user_data_dir() / "config.json"
     if not path.exists():
@@ -160,8 +173,10 @@ def load_config() -> dict[str, str] | None:
     network_mode, proxy_url = validate_network_settings(
         data.get("network_mode", "auto"), data.get("proxy_url", "")
     )
+    thinking_mode = validate_thinking_mode(data.get("thinking_mode", "off"))
     return {"base_url": base_url, "model": model, "api_key": api_key,
-            "network_mode": network_mode, "proxy_url": proxy_url}
+            "network_mode": network_mode, "proxy_url": proxy_url,
+            "thinking_mode": thinking_mode}
 
 
 def save_config(config: dict[str, str]) -> None:
@@ -169,10 +184,12 @@ def save_config(config: dict[str, str]) -> None:
     network_mode, proxy_url = validate_network_settings(
         config.get("network_mode", "auto"), config.get("proxy_url", "")
     )
+    thinking_mode = validate_thinking_mode(config.get("thinking_mode", "off"))
     directory = user_data_dir()
     directory.mkdir(parents=True, exist_ok=True)
     content = {
-        "version": 2,
+        "version": 3,
+        "thinking_mode": thinking_mode,
         "network_mode": network_mode,
         "proxy_url": proxy_url,
         "base_url": base_url,
@@ -198,10 +215,16 @@ def get_json(url: str) -> dict:
         return json.load(response)
 
 
+def thinking_label_for_config(config: dict | None) -> str:
+    if not config or not is_qwen_thinking_model(config.get("model", "")):
+        return "不适用（非 Qwen3 模型）"
+    return "开启" if config.get("thinking_mode", "off") == "on" else "关闭"
+
+
 class ConfigDialog(tk.Toplevel):
     def __init__(self, parent: tk.Tk, config: dict[str, str] | None) -> None:
         super().__init__(parent)
-        self.title("模型与网络配置（V1.1）")
+        self.title("模型、深度思考与网络配置（V1.2）")
         self.resizable(False, False)
         self.transient(parent)
         self.result: dict[str, str] | None = None
@@ -214,6 +237,7 @@ class ConfigDialog(tk.Toplevel):
         self.key_var = tk.StringVar(value=(config or {}).get("api_key", ""))
         self.network_mode = tk.StringVar(value=(config or {}).get("network_mode", "auto"))
         self.proxy_var = tk.StringVar(value=(config or {}).get("proxy_url", ""))
+        self.thinking_var = tk.StringVar(value=(config or {}).get("thinking_mode", "off"))
         for row, (label, var) in enumerate([
             ("模型接口地址（Base URL）", self.base_var),
             ("支持图片输入的模型名", self.model_var),
@@ -235,13 +259,24 @@ class ConfigDialog(tk.Toplevel):
         self.proxy_entry = ttk.Entry(frame, textvariable=self.proxy_var, width=62)
         self.proxy_entry.grid(row=10, column=0, sticky="ew", pady=(4, 8))
         self._update_proxy_field()
+        ttk.Separator(frame).grid(row=11, column=0, sticky="ew", pady=(3, 8))
+        ttk.Label(frame, text="千问深度思考模式", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=12, column=0, sticky="w")
+        thinking_row = ttk.Frame(frame)
+        thinking_row.grid(row=13, column=0, sticky="w", pady=(5, 5))
+        for label, value in (("关闭（快速阅卷）", "off"), ("开启（复杂题推理）", "on")):
+            ttk.Radiobutton(thinking_row, text=label, value=value, variable=self.thinking_var).pack(
+                side="left", padx=(0, 18))
+        ttk.Label(frame,
+                  text="仅对支持 enable_thinking 的 Qwen3 模型生效；其他模型保持原样。开启思考可能更慢、费用更高。",
+                  foreground="#666666", wraplength=500).grid(row=14, column=0, sticky="w", pady=(0, 8))
         ttk.Label(frame, text="API Key 由 Windows 当前用户 DPAPI 加密保存；代理配置仅应用到本软件。",
-                  foreground="#666666", wraplength=500).grid(row=11, column=0, sticky="w", pady=(0, 7))
+                  foreground="#666666", wraplength=500).grid(row=15, column=0, sticky="w", pady=(0, 7))
         self.test_status = tk.StringVar(value="可先测试网络连通性（免费，不检查密钥和图片模型）。")
         ttk.Label(frame, textvariable=self.test_status, wraplength=500, foreground="#555555").grid(
-            row=12, column=0, sticky="w", pady=(0, 7))
+            row=16, column=0, sticky="w", pady=(0, 7))
         controls = ttk.Frame(frame)
-        controls.grid(row=13, column=0, sticky="e")
+        controls.grid(row=17, column=0, sticky="e")
         self.test_button = ttk.Button(controls, text="测试网络连接", command=self._test_connection)
         self.test_button.pack(side="left", padx=(0, 10))
         ttk.Button(controls, text="取消", command=self.destroy).pack(side="right", padx=(8, 0))
@@ -292,8 +327,10 @@ class ConfigDialog(tk.Toplevel):
         try:
             base, model, key = validate_config(self.base_var.get(), self.model_var.get(), self.key_var.get())
             network_mode, proxy_url = validate_network_settings(self.network_mode.get(), self.proxy_var.get())
+            thinking_mode = validate_thinking_mode(self.thinking_var.get())
             self.result = {"base_url": base, "model": model, "api_key": key,
-                           "network_mode": network_mode, "proxy_url": proxy_url}
+                           "network_mode": network_mode, "proxy_url": proxy_url,
+                           "thinking_mode": thinking_mode}
             save_config(self.result)
             self.destroy()
         except Exception as exc:
@@ -304,8 +341,8 @@ class GradingLauncher:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("560x265")
-        self.root.minsize(560, 265)
+        self.root.geometry("560x285")
+        self.root.minsize(560, 285)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.processes: list[subprocess.Popen] = []
         self.start_time: float | None = None
@@ -390,6 +427,13 @@ class GradingLauncher:
             "OPENAI_API_KEY": self.config["api_key"],
             "OPENAI_BASE_URL": self.config["base_url"],
             "OPENAI_MODEL": self.config["model"],
+            # Applied only to Qwen3 family by grading_api/openai_client.py.
+            "GRADING_QWEN_THINKING_MODE": self.config.get("thinking_mode", "off"),
+            # Thinking output may take longer; non-thinking still has a 60s ceiling.
+            "GRADING_REQUEST_TIMEOUT_SECONDS": (
+                "120" if self.config.get("thinking_mode", "off") == "on"
+                and is_qwen_thinking_model(self.config["model"]) else "60"
+            ),
             "PORT": str(WEB_PORT),
             "GRADING_API_HOST": "127.0.0.1",
             "GRADING_API_PORT": str(API_PORT),
@@ -415,7 +459,10 @@ class GradingLauncher:
             return
         self.network_summary = (selection.source +
                                 (f"：{selection.proxy_url}" if selection.proxy_url else "：直连"))
-        self.status.set(f"网络：{self.network_summary}；正在启动服务…")
+        thinking_label = ("开启" if self.config.get("thinking_mode", "off") == "on" else "关闭")
+        if not is_qwen_thinking_model(self.config["model"]):
+            thinking_label = "不适用（非 Qwen3 模型）"
+        self.status.set(f"网络：{self.network_summary}；深度思考：{thinking_label}；正在启动服务…")
         self.start_button.configure(state="disabled")
         self.start_time = time.monotonic()
         self.root.after(450, self._check_ready)
@@ -433,7 +480,9 @@ class GradingLauncher:
                     and frontend.get("service") == "exam-grading-assistant"
                     and frontend.get("gradingApiBaseUrl") == API_URL
                     and frontend.get("gradingApi", {}).get("ok")):
-                self.status.set("服务已启动。网络：" + self.network_summary + "。工作台：" + WEB_URL)
+                self.status.set("服务已启动。网络：" + self.network_summary
+                                + "。深度思考：" + thinking_label_for_config(self.config)
+                                + "。工作台：" + WEB_URL)
                 self.start_button.configure(state="normal", text="打开工作台")
                 webbrowser.open(WEB_URL)
                 return

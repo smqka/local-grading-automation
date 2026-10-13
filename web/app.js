@@ -35,6 +35,8 @@ const elements = {
   confidence: document.querySelector("#confidence"),
   modelName: document.querySelector("#modelName"),
   uncertainList: document.querySelector("#uncertainList"),
+  gradingReason: null,
+  gradingDeductions: null,
   reviewReason: document.querySelector("#reviewReason"),
   historyList: document.querySelector("#historyList"),
   autoClickEnabled: document.querySelector("#autoClickEnabled"),
@@ -949,6 +951,104 @@ function validateConfig(config) {
   return "";
 }
 
+
+function setupGradingReasonView() {
+  if (document.querySelector("#gradingReasonSection")) {
+    return;
+  }
+
+  const panel = document.createElement("section");
+  panel.id = "gradingReasonSection";
+  panel.style.cssText = `
+    margin: 14px 0;
+    padding: 14px 16px;
+    border: 1px solid #dbe3ec;
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #263444;
+  `;
+
+  const heading = document.createElement("h3");
+  heading.textContent = "评分原因（AI 建议）";
+  heading.style.cssText =
+    "margin: 0 0 8px; font-size: 15px; font-weight: 700;";
+
+  const reason = document.createElement("p");
+  reason.id = "gradingReason";
+  reason.textContent = "获取建议分后，此处将显示评分原因。";
+  reason.style.cssText = `
+    margin: 0;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  `;
+
+  const deductions = document.createElement("div");
+  deductions.id = "gradingDeductionsContainer";
+  deductions.style.cssText = "display: none; margin-top: 12px;";
+
+  const deductionTitle = document.createElement("strong");
+  deductionTitle.textContent = "扣分依据";
+
+  const deductionList = document.createElement("ul");
+  deductionList.id = "gradingDeductions";
+  deductionList.style.cssText = `
+    margin: 6px 0 0;
+    padding-left: 20px;
+    line-height: 1.7;
+  `;
+
+  deductions.append(deductionTitle, deductionList);
+  panel.append(heading, reason, deductions);
+
+  // 插入到“不确定因素”区域之前
+  const anchor = elements.uncertainList;
+
+  if (anchor?.parentElement) {
+    anchor.parentElement.insertBefore(
+      panel,
+      anchor.parentElement.firstChild
+    );
+  } else if (elements.resultStatus) {
+    elements.resultStatus.insertAdjacentElement("afterend", panel);
+  }
+
+  elements.gradingReason = reason;
+  elements.gradingDeductions = deductionList;
+}
+
+
+function renderGradingReason(result) {
+  const reason = [
+    result.grading_reason,
+    result.student_answer_summary
+  ].find(value => typeof value === "string" && value.trim());
+
+  if (elements.gradingReason) {
+    elements.gradingReason.textContent =
+      reason?.trim() ||
+      "模型未返回明确的评分依据，请人工对照答案与评分规则复核。";
+  }
+
+  const deductions = Array.isArray(result.deduction_points)
+    ? result.deduction_points.filter(
+        value => typeof value === "string" && value.trim()
+      )
+    : [];
+
+  if (elements.gradingDeductions) {
+    const container = elements.gradingDeductions.parentElement;
+    container.style.display = deductions.length ? "block" : "none";
+
+    if (deductions.length) {
+      renderList(elements.gradingDeductions, deductions, "");
+    } else {
+      elements.gradingDeductions.replaceChildren();
+    }
+  }
+}
+
+
 function renderResult(result, options = {}) {
   const autoAccepted = Boolean(options.autoAccepted);
   elements.suggestedScore.textContent =
@@ -958,6 +1058,7 @@ function renderResult(result, options = {}) {
   elements.confidence.textContent = formatPercent(normalizeConfidenceRatio(result.confidence));
   elements.modelName.textContent = result.model || "--";
   renderList(elements.uncertainList, result.uncertain_factors, "无明显不确定因素");
+  renderGradingReason(result);
 
   elements.reviewBadge.textContent = autoAccepted ? "高置信度" : result.needs_review ? "需要复核" : "可参考";
   elements.reviewBadge.dataset.state = autoAccepted ? "ready" : result.needs_review ? "warning" : "ready";
@@ -975,6 +1076,10 @@ function renderResult(result, options = {}) {
 }
 
 function renderError(message) {
+  renderGradingReason({
+  grading_reason: "本次评分失败，未生成评分依据。",
+  deduction_points: []
+});
   elements.reviewBadge.textContent = "评分失败";
   elements.reviewBadge.dataset.state = "error";
   setResultStatus(message, "error");
@@ -1224,8 +1329,12 @@ elements.pauseAutoFlowBtn.addEventListener("click", () => pauseAutoFlow());
 elements.continueAutoFlowBtn.addEventListener("click", continueAutoFlow);
 elements.refreshScoreClickGridBtn.addEventListener("click", renderScoreClickGrid);
 
+
+setupGradingReasonView();
+
 loadConfig();
 loadClickConfig();
 renderHistory();
 refreshSubmitState();
 checkHealth();
+

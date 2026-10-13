@@ -83,7 +83,9 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         self.assertIn("Max score: 6.0", prompt)
         self.assertIn("Inspect the student image internally", prompt)
         self.assertIn("Do not infer missing or unclear work", prompt)
-        self.assertIn("Keep student_answer_summary empty", prompt)
+        self.assertIn("Always fill student_answer_summary", prompt)
+        self.assertIn("When points are deducted", prompt)
+
 
     def test_grade_payload_uses_only_student_answer_image(self):
         request = parse_grade_request(valid_payload(), max_image_bytes=1024)
@@ -96,7 +98,7 @@ class OpenAIClientHelpersTest(unittest.TestCase):
         self.assertEqual(len(image_urls), 1)
         self.assertIn("teacher has already confirmed", content[0]["text"])
         self.assertIn("suggested_score, max_score", content[0]["text"])
-        self.assertEqual(body["max_tokens"], 450)
+        self.assertEqual(body["max_tokens"], 650)
 
     def test_reference_parse_payload_uses_one_reference_image(self):
         payload = valid_payload()

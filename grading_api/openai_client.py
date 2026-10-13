@@ -254,6 +254,9 @@ class OpenAIResponsesClient:
                     + "\n\nReturn only a valid JSON object with these keys: "
                     "suggested_score, max_score, confidence, needs_review, review_reason, "
                     "deduction_points, student_answer_summary, uncertain_factors. "
+                    "student_answer_summary MUST contain a concise Chinese scoring explanation "
+                    "describing which visible steps earned points and why points were deducted. "
+                    "Do not invent any unobserved student work. "
                     "Return confidence as a number from 0 to 1, not as a percent."
                 ),
             },
@@ -267,7 +270,7 @@ class OpenAIResponsesClient:
                 {"role": "user", "content": content},
             ],
             "temperature": 0,
-            "max_tokens": 450,
+            "max_tokens": 650,
         }
 
     def _build_reference_chat_payload(self, request: ReferenceParseRequest) -> dict[str, Any]:
@@ -527,8 +530,14 @@ Score only answers and steps that are clearly visible in the image.
 Do not infer missing or unclear work from the standard answer or grading rules.
 If a required answer or step is not clearly visible, treat it as not shown.
 Return the suggested score directly with minimal Chinese text.
-Keep student_answer_summary empty unless a short review note is necessary.
-Set deduction_points and uncertain_factors to empty arrays unless teacher review is needed.
+Always fill student_answer_summary with 1-3 concise Chinese sentences explaining WHY the suggested score was assigned.
+Identify only visible, verifiable correct steps and errors, referring to the provided point-by-point rubric.
+Do not transcribe the student's full answer or invent unseen work.
+When points are deducted, include specific reasons in deduction_points even if needs_review is false.
+If full marks are awarded, deduction_points should be an empty array.
+uncertain_factors should be empty unless there is genuine ambiguity.
+If you cannot reliably determine why points were lost, set needs_review=true instead of inventing a justification.
+Keep the grading explanation concise and factual.
 Return only the structured JSON requested by the schema. If uncertain, choose needs_review=true and explain why briefly."""
 
 
